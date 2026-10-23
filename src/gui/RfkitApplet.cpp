@@ -449,6 +449,8 @@ RfkitApplet::RfkitApplet(QWidget* parent)
                          QStringLiteral("{{color.accent}}"),
                          QStringLiteral("{{color.text.primary}}")),
     });
+    // EXT is a read-only QLabel, so its state styles select QLabel, not QPushButton.
+    const QString indicator = QStringLiteral("QLabel");
     const QString extIndicatorStyle = makeStateBtnStyle({
         activeStateStyle(QStringLiteral("active"), QStringLiteral("{{color.background.1}}"),
                          QStringLiteral("{{color.accent}}"),
