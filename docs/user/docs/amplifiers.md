@@ -366,13 +366,7 @@ AetherSDR talks to the amplifier's REST API over plain HTTP; there is no login.
 
 The **RF-KIT Amplifier** applet:
 
-- A header with the amplifier's name, a **tuner pill** and the connection pill.
-  The tuner pill shows what the amplifier reports, worded like the KPA1500's
-  ATU: **ATU IN** (AUTO) and **ATU MAN** in green, **ATU MAN BYP** (manual,
-  network bypassed), **ATU BYP**, **ATU OFF** and **ATU NO TUNE** in red. ATU NO TUNE means the
-  tuner is in line but the amplifier reports no valid stored tuning for the
-  present frequency; the RF2K-S manual says transmission is blocked until one is
-  stored, so press TUNE (with a carrier) or tune manually. It is a status and cannot be clicked. The name is
+- A header with the amplifier's name and the connection pill. The name is
   whatever you set as the amplifier's Personalization Text; if it is too long
   for the space it is shortened with "…", and the full name shows when you hover
   over it.
@@ -383,7 +377,14 @@ The **RF-KIT Amplifier** applet:
   from 2:1 (on the reflected-power bar these points follow the forward power).
 - An info grid with temperature, supply voltage, current, band, frequency and
   the operational interface (`UNIV`, `CAT`, `UDP` or `TCI`).
-- An **ATU** line showing the tuner's mode, setup and L/C values.
+- An **ATU** line that starts with a tuner indicator showing what the amplifier
+  reports, worded like the KPA1500's ATU: **ATU IN** (AUTO) and **ATU MAN** in
+  green; **ATU MAN BYP** (manual, network bypassed), **ATU BYP**, **ATU OFF** and
+  **ATU NO TUNE** in red. ATU NO TUNE means the tuner is in line but the
+  amplifier reports no valid stored tuning for the present frequency; the RF2K-S
+  manual says transmission is blocked until one is stored, so press TUNE (with a
+  carrier) or tune manually. The indicator is a status and cannot be clicked.
+  The rest of the line shows the tuner's mode, setup and L/C values.
 - A **TUNE** button, shown only when the amplifier accepts a tune request. The
   vendor's API has no tune command, so a stock amplifier never shows it. It
   appears on an amplifier whose `restServer.py` has been modified to add a

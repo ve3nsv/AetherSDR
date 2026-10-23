@@ -164,16 +164,16 @@ never transmits (Principle VI).
   reflected-power bar uses the same two ratios, converted to watts from the
   present forward power. Reflected power and SWR are held at baseline below 1 W
   forward, as in the other amplifier applets.
-- A read-only tuner pill in the header, beside the connection pill, names the
+- A read-only tuner indicator at the start of the ATU line names the
   amplifier's tuner state from the reported mode and setup, worded like the
   KPA1500 applet's ATU: ATU IN (AUTO, or a tune in progress) and ATU MAN are
   green; ATU MAN BYP (mode MANUAL, setup BYPASS), ATU BYP, ATU OFF and ATU NO TUNE (AUTO or
   MANUAL with setup `NOT TUNED`, where the manual says transmission is blocked)
   are red. The word `OFF` is
   what a real RF2K-S sends for a switched-off tuner, so the parser takes it as
-  well as the document's literal `false`. The pill is a label, not a button.
+  well as the document's literal `false`. The indicator is a label, not a button.
 - The amplifier's name is operator-set text, so it sits in an elided label that
-  gives way to the pills and shows the whole name in a tooltip.
+  gives way to the connection pill and shows the whole name in a tooltip.
 - A TUNE button is hidden unless the amplifier's server accepted the discovery
   probe. It is enabled in every tuner state except BYPASS and OFF (where the
   amplifier's server refuses a tune), disables itself on click until the next

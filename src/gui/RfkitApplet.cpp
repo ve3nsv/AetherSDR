@@ -226,16 +226,9 @@ RfkitApplet::RfkitApplet(QWidget* parent)
         "border: 1px solid {{color.border.strong}}; border-radius: 3px; font-size: 9px; "
         "font-weight: bold; padding: 2px 6px; }");
     m_statusPill->setAlignment(Qt::AlignCenter);
-    // The tuner state sits beside the connection pill: it is a status, not a
-    // control, so it is a label and cannot be clicked or focused.
-    m_tunerPill = new QLabel(QStringLiteral("ATU —"), this);
-    m_tunerPill->setAccessibleName(tr("Tuner state"));
-    m_tunerPill->setAlignment(Qt::AlignCenter);
-    setTunerPill(Rfkit::TunerPill::Unknown);
     auto* headerRow = new QHBoxLayout;
     headerRow->setSpacing(6);
     headerRow->addWidget(m_nameLabel, 1);
-    headerRow->addWidget(m_tunerPill);
     headerRow->addWidget(m_statusPill);
     vbox->addLayout(headerRow);
 
@@ -316,10 +309,22 @@ RfkitApplet::RfkitApplet(QWidget* parent)
 
     // Tuner status line: read-only. A TUNE button (below) appears only when the
     // amplifier's server was found to accept a tune request.
-    m_tunerLabel = makeInfo(QStringLiteral("ATU  —"));
+    // The tuner state leads the line as a read-only indicator, styled like the
+    // KPA1500's ATU IN: a status, not a control, so it is a label that cannot
+    // be clicked or focused.
+    m_tunerPill = new QLabel(QStringLiteral("ATU —"), this);
+    m_tunerPill->setAccessibleName(tr("Tuner state"));
+    m_tunerPill->setAlignment(Qt::AlignCenter);
+    m_tunerPill->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    setTunerPill(Rfkit::TunerPill::Unknown);
+    m_tunerLabel = makeInfo(QString());
     m_tunerLabel->setWordWrap(true);
     m_tunerLabel->setAccessibleName(tr("Tuner status"));
-    vbox->addWidget(m_tunerLabel);
+    auto* atuRow = new QHBoxLayout;
+    atuRow->setSpacing(8);
+    atuRow->addWidget(m_tunerPill);
+    atuRow->addWidget(m_tunerLabel, 1);
+    vbox->addLayout(atuRow);
 
     vbox->addSpacing(4);
 
@@ -565,8 +570,8 @@ void RfkitApplet::setTunerPill(Rfkit::TunerPill pill)
     const QString bg = key == QLatin1String("neutral") ? QStringLiteral("{{color.background.1}}")
                                                        : QStringLiteral("{{color.background.0}}");
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_tunerPill,
-        QStringLiteral("QLabel { background: %1; color: %2; border: 1px solid %3; "
-                       "border-radius: 3px; font-size: 9px; font-weight: bold; padding: 2px 6px; }")
+        QStringLiteral("QLabel { background: %1; color: %2; border: 2px solid %3; "
+                       "border-radius: 4px; font-size: 10px; font-weight: bold; padding: 2px 8px; }")
             .arg(bg, text, color));
 }
 
@@ -819,8 +824,10 @@ void RfkitApplet::updateValueLabels()
 
     if (m_status.tuner) {
         const auto& t = *m_status.tuner;
-        QString text = QStringLiteral("ATU  %1  %2")
-            .arg(Rfkit::tunerModeLabel(t.mode), Rfkit::tunerSetupLabel(t.setup));
+        // The indicator already says NO TUNE, so the setup is not repeated.
+        QString text = t.setup == Rfkit::TunerSetup::NotTuned
+            ? Rfkit::tunerModeLabel(t.mode)
+            : QStringLiteral("%1  %2").arg(Rfkit::tunerModeLabel(t.mode), Rfkit::tunerSetupLabel(t.setup));
         if (t.l) {
             text += QStringLiteral("  L %1%2").arg(t.l->value).arg(t.l->unit.isEmpty() ? QString() : QStringLiteral(" ") + t.l->unit);
         }
@@ -833,7 +840,7 @@ void RfkitApplet::updateValueLabels()
         // disconnected so a stale reading is never painted.
         setTunerPill(m_connected ? Rfkit::tunerPill(t) : Rfkit::TunerPill::Unknown);
     } else {
-        m_tunerLabel->setText(QStringLiteral("ATU  —"));
+        m_tunerLabel->clear();
         setTunerPill(Rfkit::TunerPill::Unknown);
     }
 }
