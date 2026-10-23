@@ -168,8 +168,13 @@ TunerMode tunerModeFromValue(const QJsonValue& v)
     const QString s = v.toString();
     if (s == QLatin1String("BYPASS"))      { return TunerMode::Bypass; }
     if (s == QLatin1String("MANUAL"))      { return TunerMode::Manual; }
-    if (s == QLatin1String("AUTO_TUNING")) { return TunerMode::AutoTuning; }
+    // A modified server reports the tune in progress as AUTO_TUNING_FROM_AUTO;
+    // take any AUTO_TUNING... name as "tuning".
+    if (s.startsWith(QLatin1String("AUTO_TUNING"))) { return TunerMode::AutoTuning; }
     if (s == QLatin1String("AUTO"))        { return TunerMode::Auto; }
+    // A real RF2K-S reports a tuner that is switched off as the word OFF; the
+    // document's `false` is handled above and as the string "false".
+    if (s == QLatin1String("OFF"))         { return TunerMode::Off; }
     if (s == QLatin1String("false"))       { return TunerMode::Off; }
     return TunerMode::Unknown;
 }
@@ -405,6 +410,83 @@ QByteArray buildAntennaBody(const Antenna& antenna)
         o.insert(QLatin1String("number"), antenna.number);
     }
     return QJsonDocument(o).toJson(QJsonDocument::Compact);
+}
+
+QByteArray buildTunerStartBody()
+{
+    QJsonObject o;
+    o.insert(QLatin1String("tuner_mode"), QStringLiteral("START"));
+    return QJsonDocument(o).toJson(QJsonDocument::Compact);
+}
+
+QByteArray buildTunerProbeBody()
+{
+    return QJsonDocument(QJsonObject{}).toJson(QJsonDocument::Compact);
+}
+
+TuneApi classifyTuneProbe(int httpStatus)
+{
+    if ((httpStatus >= 200 && httpStatus < 300) || httpStatus == 400) {
+        return TuneApi::Supported;
+    }
+    if (httpStatus == 404 || httpStatus == 405 || httpStatus == 501) {
+        return TuneApi::Unsupported;
+    }
+    return TuneApi::Unknown;
+}
+
+TunerPill tunerPill(const Tuner& tuner)
+{
+    switch (tuner.mode) {
+    case TunerMode::Auto:
+        return tuner.setup == TunerSetup::NotTuned ? TunerPill::NotTuned : TunerPill::On;
+    case TunerMode::AutoTuning: return TunerPill::On;  // working on it
+    case TunerMode::Manual:
+        return tuner.setup == TunerSetup::Bypass    ? TunerPill::ManualBypass
+               : tuner.setup == TunerSetup::NotTuned ? TunerPill::NotTuned
+                                                     : TunerPill::Manual;
+    case TunerMode::Bypass:     return TunerPill::Bypass;
+    case TunerMode::Off:        return TunerPill::Off;
+    case TunerMode::Unknown:    break;
+    }
+    return TunerPill::Unknown;
+}
+
+QString tunerPillLabel(TunerPill pill)
+{
+    switch (pill) {
+    case TunerPill::On:           return QStringLiteral("ATU IN");
+    case TunerPill::Manual:       return QStringLiteral("ATU MAN");
+    case TunerPill::ManualBypass: return QStringLiteral("ATU MAN BYP");
+    case TunerPill::Bypass:       return QStringLiteral("ATU BYP");
+    case TunerPill::Off:          return QStringLiteral("ATU OFF");
+    case TunerPill::NotTuned:     return QStringLiteral("ATU NO TUNE");
+    case TunerPill::Unknown:      break;
+    }
+    return QStringLiteral("ATU —");
+}
+
+bool tunerPillInUse(TunerPill pill)
+{
+    return pill == TunerPill::On || pill == TunerPill::Manual;
+}
+
+bool tuneAllowed(const Tuner& tuner)
+{
+    return tuner.mode == TunerMode::Auto || tuner.mode == TunerMode::Manual;
+}
+
+TuneDrive tuneDrive(const Power& power)
+{
+    const QString unit = power.forward.unit.trimmed();
+    if (!unit.isEmpty() && unit.compare(QLatin1String("W"), Qt::CaseInsensitive) != 0) {
+        return TuneDrive::Unknown;
+    }
+    const int watts = power.forward.value;
+    if (watts < kTuneMinWatts || watts > kTuneMaxWatts) {
+        return TuneDrive::Outside;
+    }
+    return watts < kTuneRecommendedWatts ? TuneDrive::Low : TuneDrive::Good;
 }
 
 // ── Presentation helpers ─────────────────────────────────────────────────
