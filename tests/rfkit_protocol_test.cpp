@@ -170,6 +170,7 @@ int main()
                    && pillOf(R"({"mode": "OFF", "setup": "NOT TUNED"})") == TunerPill::Off);
         report("ATU NO TUNE is red and still allows a tune",
                tunerPillLabel(TunerPill::NotTuned) == "ATU NO TUNE" && !tunerPillInUse(TunerPill::NotTuned)
+                   && tunerPillIsAlert(TunerPill::NotTuned)
                    && tuneAllowed(*parseTuner(R"({"mode": "AUTO", "setup": "NOT TUNED"})")));
         report("an unknown mode gives the neutral pill", pillOf(R"({"mode": "WARP"})") == TunerPill::Unknown);
         report("pill labels use the KPA1500's ATU wording",
@@ -181,6 +182,10 @@ int main()
                tunerPillInUse(TunerPill::On) && tunerPillInUse(TunerPill::Manual)
                    && !tunerPillInUse(TunerPill::ManualBypass) && !tunerPillInUse(TunerPill::Bypass)
                    && !tunerPillInUse(TunerPill::Off) && !tunerPillInUse(TunerPill::Unknown));
+        report("only NO TUNE is an alert; BYP, MAN BYP, OFF and the in-use states are not",
+               !tunerPillIsAlert(TunerPill::On) && !tunerPillIsAlert(TunerPill::Manual)
+                   && !tunerPillIsAlert(TunerPill::ManualBypass) && !tunerPillIsAlert(TunerPill::Bypass)
+                   && !tunerPillIsAlert(TunerPill::Off) && !tunerPillIsAlert(TunerPill::Unknown));
         report("a tune is allowed in manual bypass but not in BYPASS or OFF",
                tuneAllowed(*parseTuner(R"({"mode": "MANUAL", "setup": "BYPASS"})"))
                    && !tuneAllowed(*parseTuner(R"({"mode": "BYPASS"})"))

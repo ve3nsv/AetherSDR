@@ -379,8 +379,9 @@ The **RF-KIT Amplifier** applet:
   the operational interface (`UNIV`, `CAT`, `UDP` or `TCI`).
 - An **ATU** line that starts with a tuner indicator showing what the amplifier
   reports, worded like the KPA1500's ATU: **ATU IN** (AUTO) and **ATU MAN** in
-  green; **ATU MAN BYP** (manual, network bypassed), **ATU BYP**, **ATU OFF** and
-  **ATU NO TUNE** in red. ATU NO TUNE means the tuner is in line but the
+  green. **ATU NO TUNE** is the only red state. **ATU MAN BYP** (manual, network
+  bypassed), **ATU BYP** and **ATU OFF** are settings you chose and stay
+  neutral. ATU NO TUNE means the tuner is in line but the
   amplifier reports no valid stored tuning for the present frequency; the RF2K-S
   manual says transmission is blocked until one is stored, so press TUNE (with a
   carrier) or tune manually. The indicator is a status and cannot be clicked.
@@ -416,11 +417,10 @@ The **RF-KIT Amplifier** applet:
   antenna, and lights, with the switch port ("EXT 16") when the amplifier gives
   one, while the external antenna is in use. It is an indicator only: the
   external antenna cannot be selected from AetherSDR.
-- **RESET** asks the amplifier to clear its error state with one click. It is
-  red while the amplifier reports an error (a non-empty status text, or an
-  error from its operational interface) and
-  green when it reports none. A click acts only while it is red. Make sure the
-  cause has been dealt with first.
+- **RESET** asks the amplifier to clear its error state. It is available only
+  while the amplifier reports an error (a non-empty status text, or an error
+  from its operational interface), when it is red, and it asks you to confirm
+  first. Make sure the cause has been dealt with first.
 
   The RF2K-S manual lists the messages the amplifier raises when one of its
   safety circuits trips, all cleared by this reset: High Antenna Reflection,

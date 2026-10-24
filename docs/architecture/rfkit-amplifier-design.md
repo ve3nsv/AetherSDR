@@ -84,10 +84,10 @@ HTTP has no connection to be "up", so:
 ## 5. What the operator can and cannot do
 
 Controls: OPERATE/STANDBY, antenna selection (internal 1–4,
-range-checked before the wire), and error reset, which is one click with no
-confirmation and is sent only while the amplifier is reporting an
-error (a non-empty `/data` status, idle being the empty string, or an
-operational-interface error); the amplifier refuses one it cannot do (409).
+range-checked before the wire), and error reset, which is enabled only while the
+amplifier is reporting an error (a non-empty `/data` status, idle being the
+empty string, or an operational-interface error) and asks for confirmation
+first; the amplifier refuses one it cannot do (409).
 
 The red rule is "any non-empty status text", and that text is shown in the same red
 banner as the interface error ("Error: High SWR"). The amplifier's manual lists eight
@@ -146,7 +146,15 @@ never transmits (Principle VI).
   else stays unknown and is asked again, up to three times per connection. The
   probe cannot start a tune on a server that, like the one verified on an
   RF2K-S, rejects a body without `tuner_mode` with a 400. A modified server that
-  treated a missing `tuner_mode` as START would defeat that.
+  treated a missing `tuner_mode` as START would defeat that. Only one server
+  variant has been inspected. On it, the handler also resets the amplifier's
+  sleep timer and wakes its sleep screen, so each probe counts as activity: once
+  per connection, with up to three retries. The polling reads do not.
+- **Protocol authority.** The PUT is not in the vendor document. Its source is
+  a community modification of the amplifier's `restServer.py`, which is an
+  additional protocol source that needs the maintainer's acceptance before this
+  is merged (Principle IV). Whether a running tune can be cancelled through it
+  is unverified.
 - **Gate.** `startTune()` sends only when the probe found support and the last
   tuner readback is AUTO or MANUAL. It is refused while the tuner is OFF,
   bypassed, already tuning, or unread.
@@ -167,9 +175,10 @@ never transmits (Principle VI).
 - A read-only tuner indicator at the start of the ATU line names the
   amplifier's tuner state from the reported mode and setup, worded like the
   KPA1500 applet's ATU: ATU IN (AUTO, or a tune in progress) and ATU MAN are
-  green; ATU MAN BYP (mode MANUAL, setup BYPASS), ATU BYP, ATU OFF and ATU NO TUNE (AUTO or
-  MANUAL with setup `NOT TUNED`, where the manual says transmission is blocked)
-  are red. The word `OFF` is
+  green. ATU NO TUNE (AUTO or MANUAL with setup `NOT TUNED`, where the manual
+  says transmission is blocked) is the only red state: the amplifier itself
+  reports it as a problem. ATU MAN BYP (mode MANUAL, setup BYPASS), ATU BYP and
+  ATU OFF are settings the operator chose and stay neutral. The word `OFF` is
   what a real RF2K-S sends for a switched-off tuner, so the parser takes it as
   well as the document's literal `false`. The indicator is a label, not a button.
 - The amplifier's name is operator-set text, so it sits in an elided label that

@@ -7,6 +7,7 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMessageBox>
 #include <QResizeEvent>
 #include <QSizePolicy>
 #include <QStringList>
@@ -388,26 +389,30 @@ RfkitApplet::RfkitApplet(QWidget* parent)
 
     m_resetErrorBtn = makeSmallButton(QStringLiteral("RESET"), this);
     m_resetErrorBtn->setAccessibleName(tr("Reset amplifier error"));
-    m_resetErrorBtn->setToolTip(tr("Reset the amplifier's error state (acts only while an "
-                                   "error is showing)"));
+    m_resetErrorBtn->setToolTip(tr("Reset the amplifier's error state (available only while "
+                                   "an error is showing)"));
     m_resetErrorBtn->setAccessibleDescription(
-        tr("Asks the amplifier to clear its error state."));
-    // Red while the amplifier reports an error, green once it reports none;
-    // neutral until it has answered.
+        tr("Asks the amplifier to clear its error state. Confirms first. Available only "
+           "while the amplifier is reporting an error."));
+    // Red and enabled while the amplifier reports an error; disabled otherwise.
     theme.applyStyleSheet(m_resetErrorBtn, makeStateBtnStyle({
         activeStateStyle(QStringLiteral("fault"), QStringLiteral("{{color.background.0}}"),
                          QStringLiteral("{{color.accent.danger}}"),
                          QStringLiteral("{{color.accent.danger}}")),
-        activeStateStyle(QStringLiteral("clear"), QStringLiteral("{{color.background.0}}"),
-                         QStringLiteral("{{color.accent.success}}"),
-                         QStringLiteral("{{color.accent.success}}")),
     }));
-    // One click asks, like the amplifier's own reset: no confirmation step. It
-    // is sent only while the amplifier is reporting an error (the button is
-    // red); when it is green there is nothing to reset. The amplifier still
-    // refuses a reset it cannot do (409).
+    // Enabled only while the amplifier is reporting an error (see refreshControls).
+    // An error latch exists to protect the hardware, so the operator confirms the
+    // cause has been dealt with rather than clearing it on a stray click. The
+    // amplifier still refuses a reset it cannot do (409).
     connect(m_resetErrorBtn, &QPushButton::clicked, this, [this]() {
-        if (errorShowing()) {
+        if (!errorShowing()) {
+            return;
+        }
+        const auto reply = QMessageBox::question(this, tr("Reset Amplifier Error"),
+            tr("Clear the RF-KIT's error state? Make sure the cause of the error has been "
+               "resolved first."),
+            QMessageBox::Yes | QMessageBox::No);
+        if (reply == QMessageBox::Yes) {
             emit errorResetRequested();
         }
     });
@@ -555,7 +560,8 @@ void RfkitApplet::setTunerPill(Rfkit::TunerPill pill)
     const bool known = pill != Rfkit::TunerPill::Unknown;
     const QString key = !known ? QStringLiteral("neutral")
                         : Rfkit::tunerPillInUse(pill) ? QStringLiteral("good")
-                                                      : QStringLiteral("bad");
+                        : Rfkit::tunerPillIsAlert(pill) ? QStringLiteral("bad")
+                                                        : QStringLiteral("neutral");
     const QString label = Rfkit::tunerPillLabel(pill);
     if (m_tunerPill->text() != label) {
         m_tunerPill->setText(label);
@@ -648,18 +654,12 @@ void RfkitApplet::refreshControls()
     // full-brightness "OPERATE" green. Same trap VkampApplet documents.
     setBtnState(m_operateBtn, operate && m_connected ? QStringLiteral("operate") : QString());
 
-    // RESET follows what the amplifier reports: red while its status text or
-    // its interface error is non-empty, green once both are known and empty,
-    // neutral until it has answered. Same m_connected guard as above.
-    QString resetState;
-    if (m_connected) {
-        if (errorShowing()) {
-            resetState = QStringLiteral("fault");
-        } else if (m_status.data && m_status.interfaceState) {
-            resetState = QStringLiteral("clear");
-        }
-    }
+    // RESET is red and enabled only while the amplifier reports an error
+    // (status text or interface error); otherwise it is the ordinary disabled
+    // button. Same m_connected guard as above.
+    const QString resetState = m_connected && errorShowing() ? QStringLiteral("fault") : QString();
     setBtnState(m_resetErrorBtn, resetState);
+    m_resetErrorBtn->setEnabled(m_connected && errorShowing());
 }
 
 QString RfkitApplet::extIndicatorDescription() const
@@ -737,7 +737,6 @@ void RfkitApplet::refreshAntennas()
 void RfkitApplet::setConnected(bool connected)
 {
     m_connected = connected;
-    m_resetErrorBtn->setEnabled(connected);
     m_tuneBtn->setEnabled(false);
     if (connected) {
         m_labelTimer.start();

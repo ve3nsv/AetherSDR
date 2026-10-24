@@ -471,6 +471,11 @@ bool tunerPillInUse(TunerPill pill)
     return pill == TunerPill::On || pill == TunerPill::Manual;
 }
 
+bool tunerPillIsAlert(TunerPill pill)
+{
+    return pill == TunerPill::NotTuned;
+}
+
 bool tuneAllowed(const Tuner& tuner)
 {
     return tuner.mode == TunerMode::Auto || tuner.mode == TunerMode::Manual;

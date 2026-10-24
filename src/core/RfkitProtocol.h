@@ -249,9 +249,12 @@ QString tunerPillLabel(TunerPill pill);
 // NotTuned: the tuner is in the path (AUTO or MANUAL) but the amplifier reports
 // setup NOT TUNED, and the manual says transmission is blocked until a valid
 // tuning is stored.
-// True when the tuner is in the signal path and usable (On, Manual); the pill is
-// green then, red for Bypass, ManualBypass, Off and NotTuned.
+// True when the tuner is in the signal path and usable (On, Manual): green.
 bool tunerPillInUse(TunerPill pill);
+// True only for NotTuned: the one state the amplifier itself reports as a
+// problem (red). Bypass, ManualBypass and Off are the operator's own settings
+// and stay neutral.
+bool tunerPillIsAlert(TunerPill pill);
 
 // A tune is worth asking for only with the tuner in the signal path and idle:
 // automatic or manual mode. Off, bypassed, already tuning, or not yet read are
