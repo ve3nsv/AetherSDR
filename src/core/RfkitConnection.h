@@ -63,6 +63,18 @@ public:
     // POST /error/reset. Clears the amplifier's error state; the device answers
     // 409 while the function is disabled, which is logged.
     void resetError();
+    // The operator's statement that this amplifier runs the community-modified
+    // REST server that accepts PUT /tuner (the "Amplifier runs the modified server
+    // (TUNE)" device setting, off by default). Nothing is ever sent to find out,
+    // so an amplifier with the setting off sees no traffic it did not see before.
+    void setTuneEnabled(bool enabled);
+    bool tuneEnabled() const { return m_tuneEnabled; }
+    // PUT /tuner {"tuner_mode":"START"}: asks the amplifier to run its automatic
+    // tune. Ignored while a previous start is still outstanding. Sent only when
+    // setTuneEnabled(true) was called and the tuner is in automatic or manual
+    // mode; refused, logged, and never sent otherwise. The amplifier tunes only while a tune
+    // carrier is already being transmitted. Nothing here keys the radio.
+    void startTune();
 
 signals:
     void connected();
@@ -81,6 +93,7 @@ private:
         bool command{false};  // operator-issued; kept in issue order ahead of polls
     };
 
+    static bool isTuneStart(const Request& request);
     void enqueue(const Request& request, bool front = false);
     void pump();
     void onReplyFinished(QNetworkReply* reply, const Request& request, int epoch);
@@ -141,6 +154,13 @@ private:
     QTimer m_deadlineTimer;
     static constexpr int kPollIntervalMs = 250;
     int m_slowPollIndex{0};
+
+    // Survives resetSession(): it is a setting, not something the amplifier said.
+    bool m_tuneEnabled{false};
+    // A START is outstanding (queued or in flight). The tuner readback that
+    // would disable the button can be a second old, so this keeps a double
+    // click from sending START twice. It is a send guard, not displayed state.
+    bool m_tuneStartPending{false};
 };
 
 }  // namespace AetherSDR

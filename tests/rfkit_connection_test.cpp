@@ -72,6 +72,7 @@ public:
     struct Reply {
         int status{200};
         QByteArray body;
+        QByteArray allow{};  // sent as an Allow header when not empty
     };
 
     StubAmp()
@@ -162,7 +163,8 @@ private:
                 if (!guard) { return; }
                 const qsizetype promised = reply.body.size() + (truncateReplies ? 64 : 0);
                 QByteArray out = "HTTP/1.1 " + QByteArray::number(reply.status) + " X\r\n"
-                    "Content-Type: application/json\r\nContent-Length: "
+                    + (reply.allow.isEmpty() ? QByteArray() : "Allow: " + reply.allow + "\r\n")
+                    + "Content-Type: application/json\r\nContent-Length: "
                     + QByteArray::number(promised) + "\r\n\r\n" + reply.body;
                 guard->write(out);
                 if (truncateReplies) {
@@ -346,6 +348,108 @@ int main(int argc, char** argv)
         report("an accepted antenna switch re-reads the list even when its reply is unparseable",
                everyClickReread);
         conn.disconnect();
+    }
+    // ── Tune: opt-in by the operator, never probed, sent only when idle ────
+    {
+        // The default, and a stock amplifier: the setting is off, so the
+        // connection sends nothing it did not before, however long it runs. No
+        // probe, no PUT (a PUT would reset the amplifier's sleep timer).
+        StubAmp amp;
+        RfkitConnection conn;
+        QSignalSpy connectedSpy(&conn, &RfkitConnection::connected);
+        QSignalSpy statusSpy(&conn, &RfkitConnection::statusUpdated);
+        conn.connectNetwork(QStringLiteral("127.0.0.1"), amp.port());
+        spin([&] { return connectedSpy.count() > 0; });
+        spinFor(700);
+        report("with the TUNE setting off nothing is sent to /tuner but its GET",
+               amp.count("GET /tuner") >= 1 && amp.count("PUT /tuner") == 0
+                   && amp.count("OPTIONS /tuner") == 0 && amp.count("HEAD /tuner") == 0);
+        report("the status says tune is not enabled",
+               !statusSpy.isEmpty()
+                   && !statusSpy.last().at(0).value<Rfkit::Status>().tuneEnabled);
+        conn.startTune();
+        spinFor(300);
+        report("startTune is refused, and nothing is sent, while the setting is off",
+               amp.count("PUT /tuner") == 0);
+        // Turning it on live shows TUNE (the status flips) and sends nothing.
+        conn.setTuneEnabled(true);
+        report("ticking the setting flips the status and sends no request of its own",
+               statusSpy.last().at(0).value<Rfkit::Status>().tuneEnabled
+                   && amp.count("PUT /tuner") == 0 && amp.count("OPTIONS /tuner") == 0);
+        conn.disconnect();
+    }
+    {
+        // The operator says the amplifier runs the modified server.
+        StubAmp amp;
+        RfkitConnection conn;
+        QSignalSpy connectedSpy(&conn, &RfkitConnection::connected);
+        QSignalSpy statusSpy(&conn, &RfkitConnection::statusUpdated);
+        conn.setTuneEnabled(true);
+        conn.connectNetwork(QStringLiteral("127.0.0.1"), amp.port());
+        spin([&] { return connectedSpy.count() > 0; });
+        report("with the setting on the status says so, and the link stays up",
+               spin([&] {
+                   return !statusSpy.isEmpty()
+                       && statusSpy.last().at(0).value<Rfkit::Status>().tuneEnabled;
+               }) && conn.isConnected());
+        spinFor(500);
+        report("no probe and no PUT is sent just because the setting is on",
+               amp.count("OPTIONS /tuner") == 0 && amp.count("PUT /tuner") == 0);
+        const auto tunerMode = [&]() {
+            if (statusSpy.isEmpty()) { return Rfkit::TunerMode::Unknown; }
+            const auto st = statusSpy.last().at(0).value<Rfkit::Status>();
+            return st.tuner ? st.tuner->mode : Rfkit::TunerMode::Unknown;
+        };
+        report("the stub's AUTO tuner readback lands",
+               spin([&] { return tunerMode() == Rfkit::TunerMode::Auto; }));
+
+        // The reply to a START says "tuning" while the readback still says AUTO:
+        // the snapshot must keep following the readback (Principle II).
+        amp.routes["PUT /tuner"] = {200, R"({"mode":"AUTO_TUNING_FROM_AUTO","setup":"CL"})"};
+        conn.startTune();
+        conn.startTune();  // a double click
+        report("startTune sends PUT /tuner with the START body",
+               spin([&] { return amp.count("PUT /tuner") >= 1; })
+                   && amp.bodies.value("PUT /tuner") == QByteArray(R"({"tuner_mode":"START"})"));
+        spinFor(400);
+        report("a double click sends one START", amp.count("PUT /tuner") == 1);
+        spinFor(600);
+        report("the reply to a START is not taken as state",
+               tunerMode() == Rfkit::TunerMode::Auto);
+        report("tune honored serialization", amp.maxOutstanding == 1);
+
+        // Once the amplifier's readback says it is tuning, that shows.
+        amp.routes["GET /tuner"] = {200, R"({"mode":"AUTO_TUNING_FROM_AUTO","setup":"CL"})"};
+        report("a tune in progress shows through the readback",
+               spin([&] { return tunerMode() == Rfkit::TunerMode::AutoTuning; }, 6000));
+        // While it is tuning, a further start is refused.
+        const int duringTune = amp.count("PUT /tuner");
+        conn.startTune();
+        spinFor(300);
+        report("startTune is refused while the amplifier is tuning",
+               amp.count("PUT /tuner") == duringTune);
+
+        // Back to AUTO: the guard has cleared, so a new start goes out.
+        amp.routes["GET /tuner"] = {200, R"({"mode":"AUTO","setup":"CL"})"};
+        spin([&] { return tunerMode() == Rfkit::TunerMode::Auto; }, 6000);
+        conn.startTune();
+        report("a later start is sent once the first has finished",
+               spin([&] { return amp.count("PUT /tuner") == duringTune + 1; }));
+
+        // A tuner that reports OFF (the document's literal false) is not asked.
+        amp.routes["GET /tuner"] = {200, R"({"mode":false})"};
+        report("the OFF readback arrives",
+               spin([&] { return tunerMode() == Rfkit::TunerMode::Off; }, 6000));
+        const int puts = amp.count("PUT /tuner");
+        conn.startTune();
+        spinFor(300);
+        report("startTune is refused while the amplifier reports the tuner OFF",
+               amp.count("PUT /tuner") == puts);
+        conn.disconnect();
+        const int after = amp.requests.size();
+        conn.startTune();
+        spinFor(200);
+        report("startTune after a disconnect is dropped", amp.requests.size() == after);
     }
 
     // ── A link that keeps dying mid-body is declared lost ─────────────────

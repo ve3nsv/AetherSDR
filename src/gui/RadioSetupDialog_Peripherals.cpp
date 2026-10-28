@@ -1625,6 +1625,28 @@ void RadioSetupDialog::buildRfkitDevice(PeripheralDeviceUi& ui, QWidget* stackPa
     addFormRow(detail, tr("IP Address"), ui.addressEdit);
     addFormRow(detail, tr("Port"), ui.portSpin);
 
+    // Opt-in, off by default. The vendor's REST API has no tune command; only an
+    // amplifier whose owner installed the community-modified restServer.py has
+    // one. Nothing is ever sent to find out, so a stock amplifier sees no new
+    // traffic and its sleep timer is never touched.
+    auto* tuneEnabled = new QCheckBox(tr("Amplifier runs the modified server (TUNE)"));
+    tuneEnabled->setObjectName(QStringLiteral("rfkitTuneEnabled"));
+    tuneEnabled->setAccessibleName(tr("RF-KIT amplifier runs the modified REST server, show TUNE"));
+    tuneEnabled->setToolTip(
+        tr("Shows a TUNE button in the RF-KIT applet. Tick this only if the amplifier's "
+           "REST server (restServer.py) was modified to accept a tune request; the vendor's "
+           "own does not, and the amplifier's updater overwrites the modification. The "
+           "amplifier tunes only while the radio is already sending a tune carrier. "
+           "AetherSDR never keys the radio. Off by default."));
+    tuneEnabled->setChecked(PeripheralSettings::deviceInt("Rfkit", "ModifiedServer", 0) != 0);
+    connect(tuneEnabled, &QCheckBox::toggled, this, [this](bool on) {
+        PeripheralSettings::setDeviceInt("Rfkit", "ModifiedServer", on ? 1 : 0);
+        if (m_rfkit) {
+            m_rfkit->setTuneEnabled(on);
+        }
+    });
+    addFormRow(detail, tr("TUNE"), tuneEnabled);
+
     m_peripheralRowSavers.append([u]() {
         if (!u->addressEdit || !u->addressEdit->text().trimmed().isEmpty()) {
             return;

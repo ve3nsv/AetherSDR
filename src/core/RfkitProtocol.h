@@ -16,6 +16,18 @@ namespace AetherSDR {
 // document, so this is a clean-room input under constitution Principle IV.
 // See docs/architecture/rfkit-amplifier-design.md for the design note.
 //
+// Additional protocol authority, for one request only (accepted by the
+// maintainer, RFC #6712, under Principle IV): the community-modified
+// restServer.py that adds PUT /tuner {"tuner_mode":"START"}. It is not a
+// manufacturer document, and its limits are these:
+//   - one server variant was inspected; others may differ;
+//   - the amplifier's updater overwrites the modification;
+//   - a failed tune is not reported (/data stays empty, /tuner is unchanged).
+// Whether a running tune can be cancelled through it is unverified and must be
+// verified before merge. The request is sent only when the operator has said, in
+// the device settings, that their amplifier runs that server; nothing is ever
+// sent to find out.
+//
 // Unlike every other amplifier peripheral here the wire is plain HTTP/1.1
 // carrying JSON, not a socket protocol with its own framing, so this layer is
 // stateless: one parse function per endpoint (bytes in, optional struct out)
@@ -25,7 +37,11 @@ namespace AetherSDR {
 //   GET  /info                   device identity + firmware versions
 //   GET  /power                  forward / reflected / SWR / temp / volts / amps
 //   GET  /data                   band, frequency, free-text status
-//   GET  /tuner                  tuner mode + L/C network (read-only)
+//   GET  /tuner                  tuner mode + L/C network
+//   PUT  /tuner                  start an automatic tune; NOT in the vendor
+//                                document, only on an amplifier whose REST
+//                                server has been modified to add it (see the
+//                                additional authority below)
 //   GET  /antennas               every antenna with ACTIVE/AVAILABLE/DISABLED
 //   GET  /antennas/active        the active antenna
 //   PUT  /antennas/active        select an antenna
@@ -131,6 +147,7 @@ struct Data {
 };
 
 enum class TunerMode { Unknown, Bypass, Manual, AutoTuning, Auto, Off };
+
 enum class TunerSetup { Unknown, NotTuned, Bypass, CL, LC };
 
 struct Tuner {
@@ -188,6 +205,10 @@ struct Status {
     std::optional<Power> power;
     std::optional<Data> data;
     std::optional<Tuner> tuner;
+    // The operator's own statement, in the device settings, that this amplifier
+    // runs the community-modified REST server that accepts PUT /tuner. Never
+    // learned from the amplifier: nothing is sent to find out.
+    bool tuneEnabled{false};
     std::optional<OperateMode> operate;
     std::optional<InterfaceState> interfaceState;
     std::optional<QVector<AntennaWithState>> antennas;
@@ -219,6 +240,41 @@ std::optional<ApiError> parseApiError(const QByteArray& body);
 
 QByteArray buildOperateModeBody(OperateMode mode);
 QByteArray buildAntennaBody(const Antenna& antenna);
+// {"tuner_mode":"START"}: the one body that starts a tune.
+QByteArray buildTunerStartBody();
+// What the header pill says about the tuner, from the mode and setup the
+// amplifier reports. A real RF2K-S gives AUTO, MANUAL (setup CL or LC, or
+// BYPASS when the network is bypassed), BYPASS and OFF; AUTO_TUNING_* counts as
+// On because the tuner is working.
+enum class TunerPill { Unknown, On, Manual, ManualBypass, Bypass, Off, NotTuned };
+TunerPill tunerPill(const Tuner& tuner);
+QString tunerPillLabel(TunerPill pill);
+// NotTuned: the tuner is in the path (AUTO or MANUAL) but the amplifier reports
+// setup NOT TUNED, and the manual says transmission is blocked until a valid
+// tuning is stored.
+// True when the tuner is in the signal path and usable (On, Manual): green.
+bool tunerPillInUse(TunerPill pill);
+// True only for NotTuned: the one state the amplifier itself reports as a
+// problem (red). Bypass, ManualBypass and Off are the operator's own settings
+// and stay neutral.
+bool tunerPillIsAlert(TunerPill pill);
+
+// A tune is worth asking for only with the tuner in the signal path and idle:
+// automatic or manual mode. Off, bypassed, already tuning, or not yet read are
+// refused.
+bool tuneAllowed(const Tuner& tuner);
+
+// The RF2K-S manual (section 7.2): tuning needs 4 to 39 W of drive; outside that
+// range the amplifier's own Tune button stays inactive. At least 10 W is
+// recommended for a precise tune. Used only as a hint on the TUNE button, never
+// to block a tune: the amplifier makes the final decision.
+inline constexpr int kTuneMinWatts = 4;
+inline constexpr int kTuneMaxWatts = 39;
+inline constexpr int kTuneRecommendedWatts = 10;
+enum class TuneDrive { Unknown, Outside, Low, Good };
+// Unknown when forward power is not reported in watts; Low is inside the range
+// but under the recommended 10 W.
+TuneDrive tuneDrive(const Power& power);
 
 // ── Presentation helpers ─────────────────────────────────────────────────
 
