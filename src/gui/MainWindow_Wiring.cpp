@@ -7410,9 +7410,9 @@ void MainWindow::wireMeters()
     // the first connected().
     //
     // Deliberately absent from this block: any transmit-path wiring (the API
-    // has no keying endpoint), and any control of the operational interface or
-    // the tuner (the former can cut the amp off from its radio; the latter is
-    // read-only in the API).
+    // has no keying endpoint; the tune request below only asks the amplifier to
+    // tune and keys nothing), and any control of the operational interface (it
+    // can cut the amp off from the radio that drives it).
     connect(&m_rfkitConn, &RfkitConnection::connected, this, [this]() {
         m_appletPanel->rfkitApplet()->setConnected(true);
         m_appletPanel->setRfkitVisible(true);
@@ -7435,6 +7435,9 @@ void MainWindow::wireMeters()
     });
     connect(m_appletPanel->rfkitApplet(), &RfkitApplet::errorResetRequested, this, [this]() {
         m_rfkitConn.resetError();
+    });
+    connect(m_appletPanel->rfkitApplet(), &RfkitApplet::tuneRequested, this, [this]() {
+        m_rfkitConn.startTune();
     });
 
     // Startup auto-connect from saved Peripherals settings — same reasoning as

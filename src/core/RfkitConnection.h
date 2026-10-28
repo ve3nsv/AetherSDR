@@ -63,6 +63,12 @@ public:
     // POST /error/reset. Clears the amplifier's error state; the device answers
     // 409 while the function is disabled, which is logged.
     void resetError();
+    // PUT /tuner {"tuner_mode":"START"}: asks the amplifier to run its automatic
+    // tune. Ignored while a previous start is still outstanding. Sent only when the amplifier's server was found to accept it
+    // (status().tuneApi) and its tuner is in automatic or manual mode; refused,
+    // logged, and never sent otherwise. The amplifier tunes only while a tune
+    // carrier is already being transmitted. Nothing here keys the radio.
+    void startTune();
 
 signals:
     void connected();
@@ -73,14 +79,16 @@ signals:
 
 private:
     struct Request {
-        enum class Method { Get, Put, Post };
+        enum class Method { Get, Put, Post, Options };
         Method method{Method::Get};
         QString path;
         QByteArray body;
         bool probe{false};  // the connect handshake (GET /info)
         bool command{false};  // operator-issued; kept in issue order ahead of polls
+        bool tuneProbe{false};  // OPTIONS /tuner: does this server have a PUT route?
     };
 
+    static bool isTuneStart(const Request& request);
     void enqueue(const Request& request, bool front = false);
     void pump();
     void onReplyFinished(QNetworkReply* reply, const Request& request, int epoch);
@@ -91,6 +99,10 @@ private:
     void onTransportDown(const QString& errorString);
     void poll();
     void enqueueFullRefresh();
+    // Asks, with OPTIONS /tuner, whether the route allows PUT. Retried only while the answer stays
+    // Unknown, at most kMaxTuneProbes times per session, and never with one
+    // already outstanding.
+    void maybeProbeTuneApi();
     void armReconnect();
     void resetSession();
 
@@ -141,6 +153,14 @@ private:
     QTimer m_deadlineTimer;
     static constexpr int kPollIntervalMs = 250;
     int m_slowPollIndex{0};
+
+    bool m_tuneProbePending{false};
+    // A START is outstanding (queued or in flight). The tuner readback that
+    // would disable the button can be a second old, so this keeps a double
+    // click from sending START twice. It is a send guard, not displayed state.
+    bool m_tuneStartPending{false};
+    int m_tuneProbeAttempts{0};
+    static constexpr int kMaxTuneProbes = 3;
 };
 
 }  // namespace AetherSDR

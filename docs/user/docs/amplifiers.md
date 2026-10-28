@@ -366,27 +366,68 @@ AetherSDR talks to the amplifier's REST API over plain HTTP; there is no login.
 
 The **RF-KIT Amplifier** applet:
 
-- A status pill, the amplifier's name, and **PWR**, **REF** and **SWR** gauges.
-  The scales are fixed, like the amplifier's own display: forward power
+- A header with the amplifier's name and the connection pill. The name is
+  whatever you set as the amplifier's Personalization Text; if it is too long
+  for the space it is shortened with "…", and the full name shows when you hover
+  over it.
+- **PWR**, **REF** and **SWR** gauges. The scales are fixed, like the
+  amplifier's own display: forward power
   0–1600 W, reflected power 0–200 W, and SWR on the amplifier's 1 / 1.5 / 2 / 3 /
   5 / ∞ scale. The reflected-power and SWR bars turn orange from 1.5:1 and red
   from 2:1 (on the reflected-power bar these points follow the forward power).
 - An info grid with temperature, supply voltage, current, band, frequency and
   the operational interface (`UNIV`, `CAT`, `UDP` or `TCI`).
-- A **TUNER** line showing the tuner's mode, setup and L/C values, and a
-  **TUNER ON** (green) / **TUNER OFF** (red) indicator beside OPERATE. The tuner
-  is read-only: the amplifier's API has no tuner control, so the indicator
-  cannot be pressed.
+- An **ATU** line that starts with a tuner indicator showing what the amplifier
+  reports, worded like the KPA1500's ATU: **ATU IN** (AUTO) and **ATU MAN** in
+  green. **ATU NO TUNE** is the only red state. **ATU MAN BYP** (manual, network
+  bypassed), **ATU BYP** and **ATU OFF** are settings you chose and stay
+  neutral. ATU NO TUNE means the tuner is in line but the
+  amplifier reports no valid stored tuning for the present frequency; the RF2K-S
+  manual says transmission is blocked until one is stored, so press TUNE (with a
+  carrier) or tune manually. The indicator is a status and cannot be clicked.
+  The rest of the line shows the tuner's mode, setup and L/C values.
+- A **TUNE** button, shown only when the amplifier accepts a tune request. The
+  vendor's API has no tune command, so a stock amplifier never shows it. It
+  appears on an amplifier whose `restServer.py` has been modified to add a
+  tune start (a community modification, installed at your own risk and
+  overwritten by the amplifier's updater). AetherSDR finds out by asking when it
+  connects, with an OPTIONS request that does not start a tune and does not wake a sleeping amplifier. The button is enabled
+  in every tuner state except ATU BYP and ATU OFF, where the amplifier
+  refuses a tune, and reads **TUNING** while the amplifier
+  reports a tune in progress. **The amplifier only tunes while a tune carrier is
+  being transmitted, and AetherSDR does not transmit one:** start the radio's
+  own TUNE first, then press TUNE here. The button turns amber while the
+  amplifier reports a tune in progress.
+
+  The RF2K-S manual (section 7.2) says tuning needs **4 to 39 W** of drive, and
+  recommends at least 10 W for a precise tune; outside that range the amplifier's
+  own Tune button stays inactive. When the forward power the amplifier reports is
+  in that range, the TUNE button gets a blue outline as a hint, and its tooltip
+  says so (and notes when the drive is under 10 W). The hint never blocks
+  anything: TUNE stays clickable in every state and the amplifier makes the final
+  decision. The manual's procedure is to put the amplifier in standby first. The
+  tuner can be switched off per band on the amplifier (Menu → Settings → Tuner →
+  Tuner On/Off), which is when you will see **ATU OFF**.
 - The amplifier's own status text and, when it reports one, an error banner.
-- **OPERATE / STANDBY**. The label changes only when the amplifier confirms.
+- **OPERATE / STANDBY**, **TUNE** and **RESET** share one row at one width. The
+  OPERATE label changes only when the amplifier confirms.
 - **ANT** buttons for the internal antennas (1–4). Antennas the amplifier
   reports as disabled, or does not list, are dimmed (hover for the reason), and the amplifier may refuse a change at
   times (it answers 409). **EXT** is dimmed unless the amplifier lists an external
   antenna, and lights, with the switch port ("EXT 16") when the amplifier gives
   one, while the external antenna is in use. It is an indicator only: the
   external antenna cannot be selected from AetherSDR.
-- **RESET ERR**, which asks for confirmation and then clears the amplifier's
-  error state. Make sure the cause has been dealt with first.
+- **RESET** asks the amplifier to clear its error state. It is available only
+  while the amplifier reports an error (a non-empty status text, or an error
+  from its operational interface), when it is red, and it asks you to confirm
+  first. Make sure the cause has been dealt with first.
+
+  The RF2K-S manual lists the messages the amplifier raises when one of its
+  safety circuits trips, all cleared by this reset: High Antenna Reflection,
+  High Input Power, Severe Error LPF, Wrong Frequency, No internal high
+  voltage, High Current, Overheating and High SWR. They appear in the red
+  **Error** line, in the amplifier's own words. Work out and fix the cause first; the manual's table gives the likely
+  one for each.
 
 The operational interface is shown but cannot be changed from AetherSDR:
 switching it could cut the amplifier off from the radio driving it. There is no

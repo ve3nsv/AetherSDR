@@ -8,6 +8,9 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMessageBox>
+#include <QResizeEvent>
+#include <QSizePolicy>
+#include <QStringList>
 #include <QStyle>
 #include <QVBoxLayout>
 
@@ -26,6 +29,42 @@ constexpr int kForwardMaxWatts = 1600;
 constexpr int kReflectedMaxWatts = 200;
 // Where the forward gauge turns red, as a fraction of its full scale.
 constexpr float kRedZoneFraction = 0.85f;
+
+// The amplifier's name is whatever the operator typed into its Personalization
+// Text, so it can be any length. It gives way to the pills beside it: it takes
+// whatever space is left and shortens with "..." when that is not enough, with
+// the whole name in the tooltip.
+class ElidedLabel : public QLabel {
+public:
+    explicit ElidedLabel(QWidget* parent) : QLabel(parent)
+    {
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    }
+    void setFullText(const QString& text)
+    {
+        m_full = text;
+        setToolTip(text);
+        updateElided();
+    }
+    QSize minimumSizeHint() const override { return QSize(0, QLabel::minimumSizeHint().height()); }
+
+protected:
+    void resizeEvent(QResizeEvent* event) override
+    {
+        QLabel::resizeEvent(event);
+        updateElided();
+    }
+
+private:
+    void updateElided()
+    {
+        const QString shown = fontMetrics().elidedText(m_full, Qt::ElideRight, width());
+        if (shown != text()) {
+            setText(shown);
+        }
+    }
+    QString m_full;
+};
 
 QVector<HGauge::Tick> evenTicks(float max)
 {
@@ -175,7 +214,7 @@ RfkitApplet::RfkitApplet(QWidget* parent)
     auto& theme = AetherSDR::ThemeManager::instance();
 
     // ── Header: device name + status pill ────────────────────────────────
-    m_nameLabel = new QLabel(this);
+    m_nameLabel = new ElidedLabel(this);
     m_nameLabel->setAccessibleName(tr("Amplifier name"));
     theme.applyStyleSheet(m_nameLabel,
         "QLabel { color: {{color.text.label}}; font-size: 10px; font-weight: bold; }");
@@ -189,6 +228,7 @@ RfkitApplet::RfkitApplet(QWidget* parent)
         "font-weight: bold; padding: 2px 6px; }");
     m_statusPill->setAlignment(Qt::AlignCenter);
     auto* headerRow = new QHBoxLayout;
+    headerRow->setSpacing(6);
     headerRow->addWidget(m_nameLabel, 1);
     headerRow->addWidget(m_statusPill);
     vbox->addLayout(headerRow);
@@ -268,18 +308,24 @@ RfkitApplet::RfkitApplet(QWidget* parent)
     infoGrid->addWidget(m_ifaceLabel,   1, 2);
     vbox->addLayout(infoGrid);
 
-    // Tuner status line: read-only (the API has no tuner control).
-    m_tunerLabel = makeInfo(QStringLiteral("TUNER  —"));
+    // Tuner status line: read-only. A TUNE button (below) appears only when the
+    // amplifier's server was found to accept a tune request.
+    // The tuner state leads the line as a read-only indicator, styled like the
+    // KPA1500's ATU IN: a status, not a control, so it is a label that cannot
+    // be clicked or focused.
+    m_tunerPill = new QLabel(QStringLiteral("ATU —"), this);
+    m_tunerPill->setAccessibleName(tr("Tuner state"));
+    m_tunerPill->setAlignment(Qt::AlignCenter);
+    m_tunerPill->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    setTunerPill(Rfkit::TunerPill::Unknown);
+    m_tunerLabel = makeInfo(QString());
     m_tunerLabel->setWordWrap(true);
     m_tunerLabel->setAccessibleName(tr("Tuner status"));
-    vbox->addWidget(m_tunerLabel);
-
-    // The device's own free-text status, as it reports it.
-    m_deviceStatusLabel = makeInfo(QString());
-    m_deviceStatusLabel->setWordWrap(true);
-    m_deviceStatusLabel->setAccessibleName(tr("Amplifier status text"));
-    m_deviceStatusLabel->hide();
-    vbox->addWidget(m_deviceStatusLabel);
+    auto* atuRow = new QHBoxLayout;
+    atuRow->setSpacing(8);
+    atuRow->addWidget(m_tunerPill);
+    atuRow->addWidget(m_tunerLabel, 1);
+    vbox->addLayout(atuRow);
 
     vbox->addSpacing(4);
 
@@ -309,32 +355,59 @@ RfkitApplet::RfkitApplet(QWidget* parent)
         emit operateToggled(!operate);
     });
 
-    // Read-only indicator: the API has no tuner control, so this shows the
-    // device's reported tuner mode and cannot be pressed.
-    const QString indicator = QStringLiteral("QLabel");
-    m_tunerIndicator = makeIndicator(QStringLiteral("TUNER —"), this);
-    m_tunerIndicator->setAccessibleName(tr("Tuner state unknown"));
-    m_tunerIndicator->setAccessibleDescription(
-        tr("Shows whether the amplifier's tuner is in the signal path. It cannot be changed "
-           "from AetherSDR."));
-    theme.applyStyleSheet(m_tunerIndicator, makeStateBtnStyle({
-        activeStateStyle(QStringLiteral("tuner"), QStringLiteral("{{color.background.0}}"),
-                         QStringLiteral("{{color.accent.success}}"),
-                         QStringLiteral("{{color.accent.success}}"), indicator),
-        activeStateStyle(QStringLiteral("tunerOff"), QStringLiteral("{{color.background.0}}"),
-                         QStringLiteral("{{color.accent.danger}}"),
-                         QStringLiteral("{{color.accent.danger}}"), indicator),
-    }, indicator));
+    // Shown only once the amplifier has answered the connection's tune probe.
+    // Clicking asks and nothing more: the label changes only when the
+    // amplifier's own tuner readback says it is tuning (Principle II), and
+    // nothing here keys the radio (Principle VI). The amplifier tunes only
+    // while a tune carrier is already being transmitted.
+    m_tuneBtn = makeSmallButton(QStringLiteral("TUNE"), this);
+    m_tuneBtn->setAccessibleName(tr("Tune"));
+    const QString tuneHelp = tr("Asks the amplifier to start its automatic tune. The amplifier "
+                                "tunes only while a tune carrier is being transmitted; AetherSDR "
+                                "does not transmit one.");
+    m_tuneHelp = tuneHelp;
+    m_tuneBtn->setAccessibleDescription(tuneHelp);
+    m_tuneBtn->setToolTip(tuneHelp);
+    // Neutral when idle; a blue outline hints that the drive power is inside the
+    // range the amplifier tunes in; amber while the amplifier reports a tune in
+    // progress.
+    theme.applyStyleSheet(m_tuneBtn, makeStateBtnStyle({
+        activeStateStyle(QStringLiteral("drive"), QStringLiteral("{{color.background.1}}"),
+                         QStringLiteral("{{color.accent}}"),
+                         QStringLiteral("{{color.text.primary}}")),
+        activeStateStyle(QStringLiteral("tuning"), QStringLiteral("{{color.background.0}}"),
+                         QStringLiteral("{{color.accent.warning}}"),
+                         QStringLiteral("{{color.accent.warning}}")),
+    }));
+    m_tuneBtn->hide();
+    connect(m_tuneBtn, &QPushButton::clicked, this, [this]() {
+        // Off until the next status arrives, so a double click asks once. The
+        // label still moves only on the amplifier's readback.
+        m_tuneBtn->setEnabled(false);
+        emit tuneRequested();
+    });
 
-    m_resetErrorBtn = makeSmallButton(QStringLiteral("RESET ERR"), this);
+    m_resetErrorBtn = makeSmallButton(QStringLiteral("RESET"), this);
     m_resetErrorBtn->setAccessibleName(tr("Reset amplifier error"));
+    m_resetErrorBtn->setToolTip(tr("Reset the amplifier's error state (available only while "
+                                   "an error is showing)"));
     m_resetErrorBtn->setAccessibleDescription(
-        tr("Asks the amplifier to clear its error state. Confirms first."));
-    theme.applyStyleSheet(m_resetErrorBtn, neutralBtnStyle());
+        tr("Asks the amplifier to clear its error state. Confirms first. Available only "
+           "while the amplifier is reporting an error."));
+    // Red and enabled while the amplifier reports an error; disabled otherwise.
+    theme.applyStyleSheet(m_resetErrorBtn, makeStateBtnStyle({
+        activeStateStyle(QStringLiteral("fault"), QStringLiteral("{{color.background.0}}"),
+                         QStringLiteral("{{color.accent.danger}}"),
+                         QStringLiteral("{{color.accent.danger}}")),
+    }));
+    // Enabled only while the amplifier is reporting an error (see refreshControls).
+    // An error latch exists to protect the hardware, so the operator confirms the
+    // cause has been dealt with rather than clearing it on a stray click. The
+    // amplifier still refuses a reset it cannot do (409).
     connect(m_resetErrorBtn, &QPushButton::clicked, this, [this]() {
-        // An error latch exists to protect the hardware; make the operator
-        // confirm the cause is dealt with rather than clearing it on a stray
-        // click. Same pattern as VkampApplet's reset confirm.
+        if (!errorShowing()) {
+            return;
+        }
         const auto reply = QMessageBox::question(this, tr("Reset Amplifier Error"),
             tr("Clear the RF-KIT's error state? Make sure the cause of the error has been "
                "resolved first."),
@@ -346,10 +419,31 @@ RfkitApplet::RfkitApplet(QWidget* parent)
 
     auto* ctrlRow = new QHBoxLayout;
     ctrlRow->setSpacing(6);
-    ctrlRow->addWidget(m_operateBtn);
-    ctrlRow->addWidget(m_tunerIndicator);
-    ctrlRow->addStretch();
-    ctrlRow->addWidget(m_resetErrorBtn);
+    // OPERATE, TUNE and RESET share the row at one width, wide enough for the
+    // longest label each of them can show, so none is clipped and they match.
+    {
+        struct Sized { QPushButton* btn; QString longest; };
+        const Sized sized[] = {
+            {m_operateBtn, QStringLiteral("OPERATE")},
+            {m_tuneBtn, QStringLiteral("TUNING")},
+            {m_resetErrorBtn, QStringLiteral("RESET")},
+        };
+        int width = 0;
+        for (const auto& item : sized) {
+            const QString shown = item.btn->text();
+            item.btn->setText(item.longest);
+            item.btn->ensurePolished();
+            width = qMax(width, item.btn->sizeHint().width());
+            item.btn->setText(shown);
+        }
+        // The coloured states use a 2px border against the neutral 1px one.
+        width += 6;
+        for (const auto& item : sized) {
+            item.btn->setMinimumWidth(width);
+            item.btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+            ctrlRow->addWidget(item.btn, 1);
+        }
+    }
     vbox->addLayout(ctrlRow);
 
     // ── Antenna row ──────────────────────────────────────────────────────
@@ -360,6 +454,8 @@ RfkitApplet::RfkitApplet(QWidget* parent)
                          QStringLiteral("{{color.accent}}"),
                          QStringLiteral("{{color.text.primary}}")),
     });
+    // EXT is a read-only QLabel, so its state styles select QLabel, not QPushButton.
+    const QString indicator = QStringLiteral("QLabel");
     const QString extIndicatorStyle = makeStateBtnStyle({
         activeStateStyle(QStringLiteral("active"), QStringLiteral("{{color.background.1}}"),
                          QStringLiteral("{{color.accent}}"),
@@ -434,17 +530,108 @@ void RfkitApplet::setStatus(const Rfkit::Status& status)
                              ? swrGaugePosition(static_cast<float>(status.power->swr.value)) : 0.0f);
     }
 
-    const QString error = status.interfaceState ? status.interfaceState->error : QString();
-    if (error.isEmpty()) {
+    // One red banner for whatever the amplifier says is wrong: its own status
+    // text from /data (idle is empty, so any text is a fault, e.g. "High SWR")
+    // and the operational-interface error, shown in the amplifier's own words.
+    QStringList problems;
+    const QString statusText = status.data ? status.data->status.trimmed() : QString();
+    const QString ifaceError = status.interfaceState ? status.interfaceState->error.trimmed() : QString();
+    if (!statusText.isEmpty()) {
+        problems << statusText;
+    }
+    if (!ifaceError.isEmpty() && ifaceError != statusText) {
+        problems << ifaceError;
+    }
+    if (problems.isEmpty()) {
         m_faultLabel->hide();
         m_faultLabel->clear();
     } else {
-        m_faultLabel->setText(tr("Error: %1").arg(error));
+        m_faultLabel->setText(tr("Error: %1").arg(problems.join(QStringLiteral("; "))));
         m_faultLabel->show();
     }
 
     refreshControls();
     refreshAntennas();
+    refreshTuneButton();
+}
+
+void RfkitApplet::setTunerPill(Rfkit::TunerPill pill)
+{
+    const bool known = pill != Rfkit::TunerPill::Unknown;
+    const QString key = !known ? QStringLiteral("neutral")
+                        : Rfkit::tunerPillInUse(pill) ? QStringLiteral("good")
+                        : Rfkit::tunerPillIsAlert(pill) ? QStringLiteral("bad")
+                                                        : QStringLiteral("neutral");
+    const QString label = Rfkit::tunerPillLabel(pill);
+    if (m_tunerPill->text() != label) {
+        m_tunerPill->setText(label);
+        m_tunerPill->setAccessibleName(known ? label : tr("Tuner state unknown"));
+    }
+    if (m_tunerPillStyleKey == key) {
+        return;
+    }
+    m_tunerPillStyleKey = key;
+    const QString color = key == QLatin1String("good") ? QStringLiteral("{{color.accent.success}}")
+                          : key == QLatin1String("bad") ? QStringLiteral("{{color.accent.danger}}")
+                                                        : QStringLiteral("{{color.border.strong}}");
+    const QString text = key == QLatin1String("neutral") ? QStringLiteral("{{color.text.label}}") : color;
+    const QString bg = key == QLatin1String("neutral") ? QStringLiteral("{{color.background.1}}")
+                                                       : QStringLiteral("{{color.background.0}}");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_tunerPill,
+        QStringLiteral("QLabel { background: %1; color: %2; border: 2px solid %3; "
+                       "border-radius: 4px; font-size: 10px; font-weight: bold; padding: 2px 8px; }")
+            .arg(bg, text, color));
+}
+
+void RfkitApplet::refreshTuneButton()
+{
+    const bool supported = m_status.tuneApi == Rfkit::TuneApi::Supported;
+    m_tuneBtn->setVisible(supported);
+    if (!supported) {
+        return;
+    }
+    const bool tuning = m_status.tuner
+        && m_status.tuner->mode == Rfkit::TunerMode::AutoTuning;
+    const bool ready = m_status.tuner && Rfkit::tuneAllowed(*m_status.tuner);
+    m_tuneBtn->setText(tuning ? QStringLiteral("TUNING") : QStringLiteral("TUNE"));
+    m_tuneBtn->setEnabled(m_connected && ready);
+    // The m_connected guard matters here as it does for the OPERATE button: the
+    // variant is appended last and would otherwise paint over a disabled button.
+    // A hint only, from the forward power the amplifier reports: the TUNE button
+    // stays clickable whatever the drive, and the amplifier decides.
+    const Rfkit::TuneDrive drive = m_status.power ? Rfkit::tuneDrive(*m_status.power)
+                                                  : Rfkit::TuneDrive::Unknown;
+    const bool inRange = drive == Rfkit::TuneDrive::Low || drive == Rfkit::TuneDrive::Good;
+    const bool showHint = m_connected && ready && !tuning && inRange;
+    setBtnState(m_tuneBtn, tuning && m_connected ? QStringLiteral("tuning")
+                           : showHint ? QStringLiteral("drive") : QString());
+
+    QString tip = m_tuneHelp;
+    if (m_connected && ready && !tuning) {
+        if (drive == Rfkit::TuneDrive::Good) {
+            tip += QLatin1Char('\n') + tr("Drive power is inside the amplifier's tuning range (%1 to %2 W).")
+                       .arg(Rfkit::kTuneMinWatts).arg(Rfkit::kTuneMaxWatts);
+        } else if (drive == Rfkit::TuneDrive::Low) {
+            tip += QLatin1Char('\n') + tr("Drive power is inside the tuning range (%1 to %2 W), but at "
+                                          "least %3 W is recommended for a precise tune.")
+                       .arg(Rfkit::kTuneMinWatts).arg(Rfkit::kTuneMaxWatts)
+                       .arg(Rfkit::kTuneRecommendedWatts);
+        } else if (drive == Rfkit::TuneDrive::Outside) {
+            tip += QLatin1Char('\n') + tr("The amplifier tunes with %1 to %2 W of drive; no tune carrier "
+                                          "in that range is reaching it now.")
+                       .arg(Rfkit::kTuneMinWatts).arg(Rfkit::kTuneMaxWatts);
+        }
+    }
+    if (m_tuneBtn->toolTip() != tip) {
+        m_tuneBtn->setToolTip(tip);
+    }
+}
+
+bool RfkitApplet::errorShowing() const
+{
+    const bool statusText = m_status.data && !m_status.data->status.trimmed().isEmpty();
+    const bool ifaceError = m_status.interfaceState && !m_status.interfaceState->error.isEmpty();
+    return statusText || ifaceError;
 }
 
 void RfkitApplet::refreshControls()
@@ -466,6 +653,13 @@ void RfkitApplet::refreshControls()
     // appended last, so source order would paint a DISCONNECTED amp in
     // full-brightness "OPERATE" green. Same trap VkampApplet documents.
     setBtnState(m_operateBtn, operate && m_connected ? QStringLiteral("operate") : QString());
+
+    // RESET is red and enabled only while the amplifier reports an error
+    // (status text or interface error); otherwise it is the ordinary disabled
+    // button. Same m_connected guard as above.
+    const QString resetState = m_connected && errorShowing() ? QStringLiteral("fault") : QString();
+    setBtnState(m_resetErrorBtn, resetState);
+    m_resetErrorBtn->setEnabled(m_connected && errorShowing());
 }
 
 QString RfkitApplet::extIndicatorDescription() const
@@ -543,14 +737,12 @@ void RfkitApplet::refreshAntennas()
 void RfkitApplet::setConnected(bool connected)
 {
     m_connected = connected;
-    m_resetErrorBtn->setEnabled(connected);
+    m_tuneBtn->setEnabled(false);
     if (connected) {
         m_labelTimer.start();
     } else {
         m_labelTimer.stop();
-        m_tunerIndicator->setText(QStringLiteral("TUNER —"));
-        setAnnouncedName(m_tunerIndicator, tr("Tuner state unknown"));
-        setBtnState(m_tunerIndicator, QString());
+        setTunerPill(Rfkit::TunerPill::Unknown);
     }
 
     m_statusPill->setText(connected ? QStringLiteral("CONNECTED") : QStringLiteral("—"));
@@ -579,6 +771,7 @@ void RfkitApplet::setConnected(bool connected)
     }
     refreshControls();
     refreshAntennas();
+    refreshTuneButton();
     if (!connected) {
         updateValueLabels();
     }
@@ -606,7 +799,7 @@ void RfkitApplet::updateValueLabels()
     const QString name = m_status.info
         ? (m_status.info->customName.isEmpty() ? m_status.info->device : m_status.info->customName)
         : QString();
-    m_nameLabel->setText(name);
+    static_cast<ElidedLabel*>(m_nameLabel)->setFullText(name);
 
     if (havePower) {
         const auto& p = *m_status.power;
@@ -622,14 +815,9 @@ void RfkitApplet::updateValueLabels()
     if (m_status.data) {
         m_bandLabel->setText(QStringLiteral("BAND  %1").arg(Rfkit::formatBand(m_status.data->band)));
         m_freqLabel->setText(QStringLiteral("FREQ  %1").arg(Rfkit::formatFrequency(m_status.data->frequency)));
-        const QString text = m_status.data->status.trimmed();
-        m_deviceStatusLabel->setText(tr("STATUS  %1").arg(text));
-        m_deviceStatusLabel->setVisible(!text.isEmpty());
     } else {
         m_bandLabel->setText(QStringLiteral("BAND  —"));
         m_freqLabel->setText(QStringLiteral("FREQ  —"));
-        m_deviceStatusLabel->clear();
-        m_deviceStatusLabel->hide();
     }
 
     m_ifaceLabel->setText(QStringLiteral("IF  %1").arg(m_status.interfaceState
@@ -637,8 +825,10 @@ void RfkitApplet::updateValueLabels()
 
     if (m_status.tuner) {
         const auto& t = *m_status.tuner;
-        QString text = QStringLiteral("TUNER  %1  %2")
-            .arg(Rfkit::tunerModeLabel(t.mode), Rfkit::tunerSetupLabel(t.setup));
+        // The indicator already says NO TUNE, so the setup is not repeated.
+        QString text = t.setup == Rfkit::TunerSetup::NotTuned
+            ? Rfkit::tunerModeLabel(t.mode)
+            : QStringLiteral("%1  %2").arg(Rfkit::tunerModeLabel(t.mode), Rfkit::tunerSetupLabel(t.setup));
         if (t.l) {
             text += QStringLiteral("  L %1%2").arg(t.l->value).arg(t.l->unit.isEmpty() ? QString() : QStringLiteral(" ") + t.l->unit);
         }
@@ -647,23 +837,12 @@ void RfkitApplet::updateValueLabels()
         }
         m_tunerLabel->setText(text);
 
-        // Enabled = the tuner is in the signal path (manual, auto or mid-tune);
-        // disabled = the amplifier reports it off or bypassed.
-        const bool known = t.mode != Rfkit::TunerMode::Unknown;
-        const bool enabled = t.mode == Rfkit::TunerMode::Manual
-            || t.mode == Rfkit::TunerMode::Auto
-            || t.mode == Rfkit::TunerMode::AutoTuning;
-        m_tunerIndicator->setText(!known ? QStringLiteral("TUNER —")
-                            : enabled ? QStringLiteral("TUNER ON") : QStringLiteral("TUNER OFF"));
-        setAnnouncedName(m_tunerIndicator, !known ? tr("Tuner state unknown")
-                                     : enabled ? tr("Tuner enabled") : tr("Tuner disabled"));
-        setBtnState(m_tunerIndicator, !known || !m_connected ? QString()
-                    : enabled ? QStringLiteral("tuner") : QStringLiteral("tunerOff"));
+        // The pill names what the amplifier reports; it is blank-neutral while
+        // disconnected so a stale reading is never painted.
+        setTunerPill(m_connected ? Rfkit::tunerPill(t) : Rfkit::TunerPill::Unknown);
     } else {
-        m_tunerLabel->setText(QStringLiteral("TUNER  —"));
-        m_tunerIndicator->setText(QStringLiteral("TUNER —"));
-        setAnnouncedName(m_tunerIndicator, tr("Tuner state unknown"));
-        setBtnState(m_tunerIndicator, QString());
+        m_tunerLabel->clear();
+        setTunerPill(Rfkit::TunerPill::Unknown);
     }
 }
 

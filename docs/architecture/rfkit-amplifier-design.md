@@ -27,7 +27,8 @@ shows as 8080.
 | GET | `/info` | connect handshake; device name, firmware versions |
 | GET | `/power` | forward / reflected / SWR / temperature / voltage / current |
 | GET | `/data` | band, frequency, free-text status |
-| GET | `/tuner` | tuner mode, setup, L / C (read-only) |
+| GET | `/tuner` | tuner mode, setup, L / C |
+| PUT | `/tuner` | start an automatic tune (`{"tuner_mode":"START"}`); not in the vendor document, only on an amplifier whose REST server has been modified to add it, and discovered per connection (below) |
 | GET | `/antennas` | every antenna with `ACTIVE` / `AVAILABLE` / `DISABLED` |
 | PUT | `/antennas/active` | select an antenna |
 | GET / PUT | `/operate-mode` | `OPERATE` / `STANDBY` |
@@ -83,8 +84,19 @@ HTTP has no connection to be "up", so:
 ## 5. What the operator can and cannot do
 
 Controls: OPERATE/STANDBY, antenna selection (internal 1–4,
-range-checked before the wire), and error reset behind a confirm dialog (an
-error latch exists to protect the hardware).
+range-checked before the wire), and error reset, which is enabled only while the
+amplifier is reporting an error (a non-empty `/data` status, idle being the
+empty string, or an operational-interface error) and asks for confirmation
+first; the amplifier refuses one it cannot do (409).
+
+The red rule is "any non-empty status text", and that text is shown in the same red
+banner as the interface error ("Error: High SWR"). The amplifier's manual lists eight
+error messages (High Antenna Reflection, High Input Power, Severe Error LPF,
+Wrong Frequency, No internal high voltage, High Current, Overheating, High SWR),
+each a safety-circuit trip cleared by Reset, and an idle amplifier reports an
+empty status, so no listed message is informational. A status the manual does
+not list is also treated as an error; that can only show red when it need not,
+never green when it should be red.
 
 Never latched optimistically (Principle II): every control asks, and the
 applet repaints only from the device's own reply; the antenna buttons only
@@ -116,7 +128,43 @@ Deliberately absent:
 - **Operational interface changes.** `PUT /operational-interface` could cut the
   amplifier off from the radio that is driving it, silently. It is shown, not
   switchable.
-- **Tuner control.** The API exposes the tuner read-only.
+- **Tuner configuration.** Beyond asking for a tune (below), nothing sets the
+  tuner's mode or network; the vendor API exposes the tuner read-only.
+
+### Tune start (modified servers only)
+
+The vendor document has no tune command. A community modification of the
+amplifier's `restServer.py` adds `PUT /tuner {"tuner_mode":"START"}`, which
+calls the amplifier's own autotune. The amplifier tunes only while a tune
+carrier is already on the air, so this request keys nothing and the applet
+never transmits (Principle VI).
+
+- **Discovery, not assumption.** After connecting, the connection sends
+  `OPTIONS /tuner`. The amplifier's REST server is built on Bottle, which
+  answers a method a route does not have with 405 and an `Allow` header that
+  lists the methods it does have, before any route handler runs. A server
+  modified to start a tune answers `Allow: GET,PUT`; a stock server is expected
+  to answer `Allow: GET`. An `Allow` header naming PUT means supported; one
+  without PUT means not supported; 404 and 501 mean not supported; no `Allow`
+  header, or any other reply, stays unknown and is asked again, up to three
+  times per connection. The probe cannot start a tune, because the handler
+  never runs. It is an OPTIONS, not a PUT, on purpose: on the server inspected,
+  the PUT handler resets the amplifier's sleep timer and wakes a sleeping
+  amplifier (tested on an RF2K-S), and OPTIONS does not. Only the modified
+  server has been tested: `Allow: GET,PUT` on `/tuner` and `Allow: GET` on
+  `/power`. The stock amplifier's answer is expected, not confirmed.
+- **Protocol authority.** The PUT is not in the vendor document. Its source is
+  a community modification of the amplifier's `restServer.py`, which is an
+  additional protocol source that needs the maintainer's acceptance before this
+  is merged (Principle IV). Whether a running tune can be cancelled through it
+  is unverified.
+- **Gate.** `startTune()` sends only when the probe found support and the last
+  tuner readback is AUTO or MANUAL. It is refused while the tuner is OFF,
+  bypassed, already tuning, or unread.
+- **No latch (Principle II).** The reply to the start request is not taken as
+  state: the connection re-reads `/tuner` and `/data`. The TUNE button reads
+  TUNING only when the amplifier's mode says so (`AUTO_TUNING_FROM_AUTO`
+  decodes as tuning).
 
 ## 6. Applet behaviour
 
@@ -127,8 +175,27 @@ Deliberately absent:
   reflected-power bar uses the same two ratios, converted to watts from the
   present forward power. Reflected power and SWR are held at baseline below 1 W
   forward, as in the other amplifier applets.
-- A read-only TUNER ON / OFF indicator follows the reported tuner mode (on for
-  manual, auto and tuning; off for off and bypass).
+- A read-only tuner indicator at the start of the ATU line names the
+  amplifier's tuner state from the reported mode and setup, worded like the
+  KPA1500 applet's ATU: ATU IN (AUTO, or a tune in progress) and ATU MAN are
+  green. ATU NO TUNE (AUTO or MANUAL with setup `NOT TUNED`, where the manual
+  says transmission is blocked) is the only red state: the amplifier itself
+  reports it as a problem. ATU MAN BYP (mode MANUAL, setup BYPASS), ATU BYP and
+  ATU OFF are settings the operator chose and stay neutral. The word `OFF` is
+  what a real RF2K-S sends for a switched-off tuner, so the parser takes it as
+  well as the document's literal `false`. The indicator is a label, not a button.
+- The amplifier's name is operator-set text, so it sits in an elided label that
+  gives way to the connection pill and shows the whole name in a tooltip.
+- A TUNE button is hidden unless the amplifier's server accepted the discovery
+  probe. It is enabled in every tuner state except BYPASS and OFF (where the
+  amplifier's server refuses a tune), disables itself on click until the next
+  status arrives (one start per click), and reads TUNING (amber) only from the
+  amplifier's own tuner readback. A blue outline hints that the forward power
+  from `/power` is inside the 4 to 39 W the manual gives for tuning (section 7.2;
+  10 W recommended, noted in the tooltip); it is a hint only, derived from the
+  reading and never a gate. OPERATE, TUNE and RESET share one row at one
+  width, sized to the longest label each can show; the antenna row holds only
+  the antenna buttons.
 - An unset field renders as "—", never 0; disconnecting drops every remembered
   reading.
 - Frequency is formatted from the unit the device reports (Hz / kHz / MHz); an
@@ -145,9 +212,7 @@ the conservative reading and each is a one-line change:
    not parsed into a fault state.
 3. The `false` value in the tuner `mode` enum (a generator artifact in the
    document). Accepted as a boolean or the string `"false"` and shown as `OFF`.
-4. Whether `POST /error/reset` should be offered only while an error is
-   present. Today the button is always enabled when connected, and the device
-   answers 409 when the function is disabled.
+4. Whether the manual's eight error messages are the whole vocabulary; any non-empty status is treated as an error (§5).
 5. Real poll latency: if the device cannot sustain 250 ms rounds, the
    serialization above degrades the rate gracefully, but the interval may want
    raising.
