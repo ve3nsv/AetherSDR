@@ -399,6 +399,14 @@ The **RF-KIT Amplifier** applet:
   own TUNE first, then press TUNE here. The button turns amber while the
   amplifier reports a tune in progress.
 
+  **If the amplifier is asleep:** it wakes its screen when it receives a tune
+  request, which can take several seconds, and TUNE stays grey until the
+  amplifier answers. On the amplifier tested, going to sleep made the SWR rise
+  and the relays click, which looks like the tuner dropping to bypass, while the
+  amplifier's REST API kept reporting the same stored tuner state, so **ATU IN**
+  can still be shown. The indicator shows what the amplifier reports and cannot
+  see sleep.
+
   The RF2K-S manual (section 7.2) says tuning needs **4 to 39 W** of drive, and
   recommends at least 10 W for a precise tune; outside that range the amplifier's
   own Tune button stays inactive. When the forward power the amplifier reports is

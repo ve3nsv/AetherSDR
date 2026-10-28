@@ -153,6 +153,15 @@ never transmits (Principle VI).
   amplifier (tested on an RF2K-S), and OPTIONS does not. Only the modified
   server has been tested: `Allow: GET,PUT` on `/tuner` and `Allow: GET` on
   `/power`. The stock amplifier's answer is expected, not confirmed.
+- **Sleep.** Every PUT handler on the inspected server calls `handle_sleep()`
+  first, which resets the sleep timer and wakes the sleep screen; GETs and
+  OPTIONS do not. On an RF2K-S that was asleep, a bare `PUT /tuner` took about
+  5 s to answer, longer than the 4 s transfer timeout. In hand testing, TUNE
+  pressed on a sleeping amplifier greyed and then recovered when the amplifier
+  woke, with no error shown. `/tuner`, `/data` and `/operate-mode` returned
+  identical values awake and asleep, so the applet cannot know the amplifier is
+  asleep, and ATU IN can show while the tuner is not in line. Whether command
+  PUTs need a longer timeout is left open until a failure is observed.
 - **Protocol authority.** The PUT is not in the vendor document. Its source is
   a community modification of the amplifier's `restServer.py`, which is an
   additional protocol source that needs the maintainer's acceptance before this
