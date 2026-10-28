@@ -199,18 +199,24 @@ int main()
     // ── PUT /tuner (modified servers only) ────────────────────────────────
     report("the tune start body is exact",
            buildTunerStartBody() == QByteArray(R"({"tuner_mode":"START"})"));
-    report("the probe body is an empty object and never asks for a tune",
-           buildTunerProbeBody() == QByteArray("{}"));
-    report("a 405 (stock server, no such route) is Unsupported",
-           classifyTuneProbe(405) == TuneApi::Unsupported);
+    report("a 405 whose Allow names PUT is Supported (a modified server)",
+           classifyTuneProbe(405, "GET,PUT") == TuneApi::Supported
+               && classifyTuneProbe(405, "get, put") == TuneApi::Supported);
+    report("a 405 whose Allow lacks PUT is Unsupported (a stock server)",
+           classifyTuneProbe(405, "GET") == TuneApi::Unsupported
+               && classifyTuneProbe(405, "GET, HEAD") == TuneApi::Unsupported);
+    report("a 2xx is read by its Allow header too",
+           classifyTuneProbe(204, "GET, PUT, OPTIONS") == TuneApi::Supported
+               && classifyTuneProbe(200, "GET") == TuneApi::Unsupported);
     report("404 and 501 are Unsupported",
-           classifyTuneProbe(404) == TuneApi::Unsupported && classifyTuneProbe(501) == TuneApi::Unsupported);
-    report("a 400 (the modified server rejecting the empty body) is Supported",
-           classifyTuneProbe(400) == TuneApi::Supported);
-    report("a 200 (tuner off or bypassed on a modified server) is Supported",
-           classifyTuneProbe(200) == TuneApi::Supported);
-    report("409 and 500 say nothing either way",
-           classifyTuneProbe(409) == TuneApi::Unknown && classifyTuneProbe(500) == TuneApi::Unknown);
+           classifyTuneProbe(404, QByteArray()) == TuneApi::Unsupported
+               && classifyTuneProbe(501, QByteArray()) == TuneApi::Unsupported);
+    report("no Allow header, or any other status, says nothing either way",
+           classifyTuneProbe(405, QByteArray()) == TuneApi::Unknown
+               && classifyTuneProbe(200, "  ") == TuneApi::Unknown
+               && classifyTuneProbe(400, "GET,PUT") == TuneApi::Unknown
+               && classifyTuneProbe(409, "GET") == TuneApi::Unknown
+               && classifyTuneProbe(500, "GET,PUT") == TuneApi::Unknown);
     {
         const auto mk = [](TunerMode m) { Tuner t; t.mode = m; return t; };
         report("a tune is allowed only from automatic or manual mode",

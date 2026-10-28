@@ -72,6 +72,7 @@ public:
     struct Reply {
         int status{200};
         QByteArray body;
+        QByteArray allow{};  // sent as an Allow header when not empty
     };
 
     StubAmp()
@@ -162,7 +163,8 @@ private:
                 if (!guard) { return; }
                 const qsizetype promised = reply.body.size() + (truncateReplies ? 64 : 0);
                 QByteArray out = "HTTP/1.1 " + QByteArray::number(reply.status) + " X\r\n"
-                    "Content-Type: application/json\r\nContent-Length: "
+                    + (reply.allow.isEmpty() ? QByteArray() : "Allow: " + reply.allow + "\r\n")
+                    + "Content-Type: application/json\r\nContent-Length: "
                     + QByteArray::number(promised) + "\r\n\r\n" + reply.body;
                 guard->write(out);
                 if (truncateReplies) {
@@ -349,40 +351,41 @@ int main(int argc, char** argv)
     }
     // ── Tune: probed per connection, sent only when supported and idle ─────
     {
-        // A stock server: PUT /tuner has no route (405).
+        // A stock server: /tuner has no PUT route, so OPTIONS gets a 405 that
+        // allows GET only.
         StubAmp amp;
-        amp.routes["PUT /tuner"] = {405, "Method Not Allowed"};
+        amp.routes["OPTIONS /tuner"] = {405, "Method Not Allowed", "GET"};
         RfkitConnection conn;
         QSignalSpy connectedSpy(&conn, &RfkitConnection::connected);
         QSignalSpy statusSpy(&conn, &RfkitConnection::statusUpdated);
         conn.connectNetwork(QStringLiteral("127.0.0.1"), amp.port());
         spin([&] { return connectedSpy.count() > 0; });
-        report("the connection probes PUT /tuner with an empty object, not a tune",
-               spin([&] { return amp.count("PUT /tuner") >= 1; })
-                   && amp.bodies.value("PUT /tuner") == QByteArray("{}"));
-        report("a 405 marks tuning Unsupported",
+        report("the connection probes with OPTIONS /tuner and sends no PUT",
+               spin([&] { return amp.count("OPTIONS /tuner") >= 1; })
+                   && amp.count("PUT /tuner") == 0);
+        report("a 405 whose Allow lacks PUT marks tuning Unsupported",
                spin([&] {
                    return !statusSpy.isEmpty()
                        && statusSpy.last().at(0).value<Rfkit::Status>().tuneApi == Rfkit::TuneApi::Unsupported;
                }));
-        const int before = amp.count("PUT /tuner");
+        const int probes = amp.count("OPTIONS /tuner");
         conn.startTune();
         spinFor(300);
         report("startTune is refused, and nothing is sent, on an unsupported amplifier",
-               amp.count("PUT /tuner") == before);
-        report("an answered probe is not repeated", before == 1);
+               amp.count("PUT /tuner") == 0);
+        report("an answered probe is not repeated", probes == 1 && amp.count("OPTIONS /tuner") == 1);
         conn.disconnect();
     }
     {
-        // A modified server: the empty probe gets a 400.
+        // A modified server: /tuner allows PUT, so the 405 to OPTIONS lists it.
         StubAmp amp;
-        amp.routes["PUT /tuner"] = {400, R"({"status":"400 Bad Request","reason":"START required"})"};
+        amp.routes["OPTIONS /tuner"] = {405, "Method Not Allowed", "GET,PUT"};
         RfkitConnection conn;
         QSignalSpy connectedSpy(&conn, &RfkitConnection::connected);
         QSignalSpy statusSpy(&conn, &RfkitConnection::statusUpdated);
         conn.connectNetwork(QStringLiteral("127.0.0.1"), amp.port());
         spin([&] { return connectedSpy.count() > 0; });
-        report("a 400 to the probe marks tuning Supported, and the link stays up",
+        report("a 405 whose Allow names PUT marks tuning Supported, and the link stays up",
                spin([&] {
                    return !statusSpy.isEmpty()
                        && statusSpy.last().at(0).value<Rfkit::Status>().tuneApi == Rfkit::TuneApi::Supported;
@@ -401,10 +404,10 @@ int main(int argc, char** argv)
         conn.startTune();
         conn.startTune();  // a double click
         report("startTune sends PUT /tuner with the START body",
-               spin([&] { return amp.count("PUT /tuner") >= 2; })
+               spin([&] { return amp.count("PUT /tuner") >= 1; })
                    && amp.bodies.value("PUT /tuner") == QByteArray(R"({"tuner_mode":"START"})"));
         spinFor(400);
-        report("a double click sends one START", amp.count("PUT /tuner") == 2);
+        report("a double click sends one START", amp.count("PUT /tuner") == 1);
         spinFor(600);
         report("the reply to a START is not taken as state",
                tunerMode() == Rfkit::TunerMode::Auto);

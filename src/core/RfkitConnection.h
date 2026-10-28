@@ -79,13 +79,13 @@ signals:
 
 private:
     struct Request {
-        enum class Method { Get, Put, Post };
+        enum class Method { Get, Put, Post, Options };
         Method method{Method::Get};
         QString path;
         QByteArray body;
         bool probe{false};  // the connect handshake (GET /info)
         bool command{false};  // operator-issued; kept in issue order ahead of polls
-        bool tuneProbe{false};  // PUT /tuner {} : does this server have the route?
+        bool tuneProbe{false};  // OPTIONS /tuner: does this server have a PUT route?
     };
 
     static bool isTuneStart(const Request& request);
@@ -99,7 +99,7 @@ private:
     void onTransportDown(const QString& errorString);
     void poll();
     void enqueueFullRefresh();
-    // Asks whether PUT /tuner exists. Retried only while the answer stays
+    // Asks, with OPTIONS /tuner, whether the route allows PUT. Retried only while the answer stays
     // Unknown, at most kMaxTuneProbes times per session, and never with one
     // already outstanding.
     void maybeProbeTuneApi();

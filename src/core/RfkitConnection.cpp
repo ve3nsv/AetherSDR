@@ -32,7 +32,7 @@ const QStringList& slowPollPaths()
 
 }  // namespace
 
-// The tune start itself: PUT /tuner that is not the discovery probe.
+// The tune start itself: a PUT /tuner (the discovery probe is an OPTIONS).
 bool RfkitConnection::isTuneStart(const Request& request)
 {
     return request.method == Request::Method::Put
@@ -211,6 +211,9 @@ void RfkitConnection::pump()
         netRequest.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
         reply = m_nam.post(netRequest, request.body);
         break;
+    case Request::Method::Options:
+        reply = m_nam.sendCustomRequest(netRequest, "OPTIONS");
+        break;
     }
 
     m_inFlight = true;
@@ -269,9 +272,10 @@ void RfkitConnection::onReplyFinished(QNetworkReply* reply, const Request& reque
     m_consecutiveFailures = 0;
 
     if (request.tuneProbe) {
-        // Not an error path: a stock server's 405 is the expected answer.
+        // Not an error path: the 405 a Bottle server gives OPTIONS is the expected
+        // answer, and its Allow header is what says whether PUT exists.
         m_tuneProbePending = false;
-        const Rfkit::TuneApi api = Rfkit::classifyTuneProbe(http);
+        const Rfkit::TuneApi api = Rfkit::classifyTuneProbe(http, reply->rawHeader("Allow"));
         if (api != m_status.tuneApi) {
             m_status.tuneApi = api;
             qCInfo(lcTuner) << "RfkitConnection: tune via REST"
@@ -293,6 +297,7 @@ void RfkitConnection::onReplyFinished(QNetworkReply* reply, const Request& reque
         case Request::Method::Get:  method = "GET"; break;
         case Request::Method::Put:  method = "PUT"; break;
         case Request::Method::Post: method = "POST"; break;
+        case Request::Method::Options: method = "OPTIONS"; break;
         }
         qCWarning(lcTuner).noquote() << "RfkitConnection:" << method
                                      << request.path << "refused:" << http << reason;
@@ -434,9 +439,10 @@ void RfkitConnection::maybeProbeTuneApi()
     ++m_tuneProbeAttempts;
     m_tuneProbePending = true;
     Request request;
-    request.method = Request::Method::Put;
+    // OPTIONS, not a PUT: the route's handler never runs, so the probe cannot
+    // start a tune and does not wake a sleeping amplifier.
+    request.method = Request::Method::Options;
     request.path = path(Rfkit::kPathTuner);
-    request.body = Rfkit::buildTunerProbeBody();
     request.tuneProbe = true;
     enqueue(request);
 }

@@ -391,7 +391,7 @@ The **RF-KIT Amplifier** applet:
   appears on an amplifier whose `restServer.py` has been modified to add a
   tune start (a community modification, installed at your own risk and
   overwritten by the amplifier's updater). AetherSDR finds out by asking when it
-  connects, with a request that does not start a tune. The button is enabled
+  connects, with an OPTIONS request that does not start a tune and does not wake a sleeping amplifier. The button is enabled
   in every tuner state except ATU BYP and ATU OFF, where the amplifier
   refuses a tune, and reads **TUNING** while the amplifier
   reports a tune in progress. **The amplifier only tunes while a tune carrier is

@@ -419,20 +419,23 @@ QByteArray buildTunerStartBody()
     return QJsonDocument(o).toJson(QJsonDocument::Compact);
 }
 
-QByteArray buildTunerProbeBody()
+TuneApi classifyTuneProbe(int httpStatus, const QByteArray& allowHeader)
 {
-    return QJsonDocument(QJsonObject{}).toJson(QJsonDocument::Compact);
-}
-
-TuneApi classifyTuneProbe(int httpStatus)
-{
-    if ((httpStatus >= 200 && httpStatus < 300) || httpStatus == 400) {
-        return TuneApi::Supported;
-    }
-    if (httpStatus == 404 || httpStatus == 405 || httpStatus == 501) {
+    if (httpStatus == 404 || httpStatus == 501) {
         return TuneApi::Unsupported;
     }
-    return TuneApi::Unknown;
+    // Only a 2xx or the 405 a Bottle server gives is read for its Allow header.
+    const bool answered = (httpStatus >= 200 && httpStatus < 300) || httpStatus == 405;
+    if (!answered || allowHeader.trimmed().isEmpty()) {
+        return TuneApi::Unknown;
+    }
+    const QList<QByteArray> methods = allowHeader.split(',');
+    for (const QByteArray& method : methods) {
+        if (method.trimmed().compare("PUT", Qt::CaseInsensitive) == 0) {
+            return TuneApi::Supported;
+        }
+    }
+    return TuneApi::Unsupported;
 }
 
 TunerPill tunerPill(const Tuner& tuner)

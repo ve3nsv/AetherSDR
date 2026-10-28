@@ -135,7 +135,7 @@ struct Data {
 
 enum class TunerMode { Unknown, Bypass, Manual, AutoTuning, Auto, Off };
 
-// Whether the amplifier's REST server accepts PUT /tuner. The vendor document
+// Whether the amplifier's REST server allows PUT /tuner. The vendor document
 // has the tuner read-only, so this is learned per connection by asking
 // (classifyTuneProbe), never assumed.
 enum class TuneApi { Unknown, Supported, Unsupported };
@@ -230,15 +230,16 @@ QByteArray buildOperateModeBody(OperateMode mode);
 QByteArray buildAntennaBody(const Antenna& antenna);
 // {"tuner_mode":"START"}: the one body that starts a tune.
 QByteArray buildTunerStartBody();
-// {}: asks PUT /tuner whether it exists without asking it to do anything. A
-// modified server answers it with 400 (or, with the tuner off or bypassed, a
-// 200 naming that state); a stock one has no such route and answers 405.
-QByteArray buildTunerProbeBody();
-
-// Reads the HTTP status of a tuner-probe reply. 2xx and 400 mean the route
-// exists; 404, 405 and 501 mean it does not; anything else (409, 5xx...) says
-// nothing either way and stays Unknown.
-TuneApi classifyTuneProbe(int httpStatus);
+// Reads the reply to the tuner probe, OPTIONS /tuner. The probe never runs the
+// route's handler, so it cannot start a tune and, unlike a PUT, does not wake a
+// sleeping amplifier or reset its sleep timer. A server built on Bottle (the
+// RF2K-S's) answers a method the route does not have with 405 and an Allow
+// header that lists the methods it does: "GET,PUT" on a server modified to
+// start a tune, "GET" on a stock one. So the Allow header decides, whatever
+// the status: it names PUT = Supported, it is present without PUT =
+// Unsupported. A 404 or 501 is Unsupported. A reply with no Allow header, or any
+// other status, says nothing either way and stays Unknown.
+TuneApi classifyTuneProbe(int httpStatus, const QByteArray& allowHeader);
 // What the header pill says about the tuner, from the mode and setup the
 // amplifier reports. A real RF2K-S gives AUTO, MANUAL (setup CL or LC, or
 // BYPASS when the network is bypassed), BYPASS and OFF; AUTO_TUNING_* counts as

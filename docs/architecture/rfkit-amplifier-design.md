@@ -140,16 +140,19 @@ carrier is already on the air, so this request keys nothing and the applet
 never transmits (Principle VI).
 
 - **Discovery, not assumption.** After connecting, the connection sends
-  `PUT /tuner` with the empty body `{}`. A modified server answers 400 (or a
-  200 naming OFF or BYPASS); a stock server has no such route and answers 405.
-  2xx and 400 mean supported; 404, 405 and 501 mean not supported; anything
-  else stays unknown and is asked again, up to three times per connection. The
-  probe cannot start a tune on a server that, like the one verified on an
-  RF2K-S, rejects a body without `tuner_mode` with a 400. A modified server that
-  treated a missing `tuner_mode` as START would defeat that. Only one server
-  variant has been inspected. On it, the handler also resets the amplifier's
-  sleep timer and wakes its sleep screen, so each probe counts as activity: once
-  per connection, with up to three retries. The polling reads do not.
+  `OPTIONS /tuner`. The amplifier's REST server is built on Bottle, which
+  answers a method a route does not have with 405 and an `Allow` header that
+  lists the methods it does have, before any route handler runs. A server
+  modified to start a tune answers `Allow: GET,PUT`; a stock server is expected
+  to answer `Allow: GET`. An `Allow` header naming PUT means supported; one
+  without PUT means not supported; 404 and 501 mean not supported; no `Allow`
+  header, or any other reply, stays unknown and is asked again, up to three
+  times per connection. The probe cannot start a tune, because the handler
+  never runs. It is an OPTIONS, not a PUT, on purpose: on the server inspected,
+  the PUT handler resets the amplifier's sleep timer and wakes a sleeping
+  amplifier (tested on an RF2K-S), and OPTIONS does not. Only the modified
+  server has been tested: `Allow: GET,PUT` on `/tuner` and `Allow: GET` on
+  `/power`. The stock amplifier's answer is expected, not confirmed.
 - **Protocol authority.** The PUT is not in the vendor document. Its source is
   a community modification of the amplifier's `restServer.py`, which is an
   additional protocol source that needs the maintainer's acceptance before this
