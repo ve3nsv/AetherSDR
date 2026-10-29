@@ -253,6 +253,14 @@ inline constexpr int kTxPollSlots = 5;
 // The endpoint to read on tick `slot` (any non-negative number; it wraps).
 const char* pollPath(bool transmitting, int slot);
 
+// How long to wait before the next reconnect attempt, after `attempt` failed
+// ones in a row (0 for the first): 5 s, 15 s, 30 s, then 60 s. The amplifier's
+// web server (Python wsgiref) logs a BrokenPipeError for every connection the
+// client closed before the answer, and one that is being hammered with retries
+// has stayed unresponsive for minutes (found with FlexWeb), so a fixed 5 s retry
+// is backed off the longer the amplifier stays unreachable.
+int reconnectDelayMs(int attempt);
+
 // How often the keep-awake request is repeated. The amplifier's shortest sleep
 // setting is 3 minutes, so a minute leaves two chances before it sleeps.
 inline constexpr int kKeepAwakeIntervalMs = 60 * 1000;

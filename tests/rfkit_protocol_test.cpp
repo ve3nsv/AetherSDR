@@ -421,6 +421,11 @@ int main()
                    && pollPath(false, 7919) != nullptr && pollPath(true, 0) != nullptr);
         report("polling rates are 150 ms receiving and 15 ms transmitting",
                kRxPollIntervalMs == 150 && kTxPollIntervalMs == 15);
+        report("reconnect backs off 5 s, 15 s, 30 s, then holds at 60 s",
+               reconnectDelayMs(0) == 5000 && reconnectDelayMs(1) == 15000
+                   && reconnectDelayMs(2) == 30000 && reconnectDelayMs(3) == 60000
+                   && reconnectDelayMs(4) == 60000 && reconnectDelayMs(1000) == 60000
+                   && reconnectDelayMs(-1) == 5000);
         report("keep-awake repeats well inside the amplifier's 3-minute minimum sleep",
                kKeepAwakeIntervalMs > 0 && kKeepAwakeIntervalMs <= 90 * 1000);
         // {} must never be, or contain, a tune start.

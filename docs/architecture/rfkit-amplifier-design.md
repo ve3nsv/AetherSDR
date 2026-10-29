@@ -82,9 +82,8 @@ HTTP has no connection to be "up", so:
 - Each reply carries the session epoch it was issued under; a late reply from a
   previous session is discarded unread (#2380).
 - Boundary hygiene (Principle VII): bodies capped at 64 KiB (also enforced
-  while streaming), no redirects, no proxy, no cache, a 4 s transfer timeout for reads and 9 s for writes (an
-  inactivity timeout; every PUT wakes a sleeping amplifier first, which took about
-  5 s) plus a 10 s deadline on the whole of every request, so a
+  while streaming), no redirects, no proxy, no cache, a 4 s transfer timeout for the connect handshake and 15 s for every other
+  request (an inactivity timeout) plus a 20 s deadline on the whole of every request, so a
   peer that trickles bytes cannot hold the single serialized slot; a transfer
   that breaks after the headers counts as a transport failure, while an HTTP
   error status does not. The address field is built into a `QUrl` in strict mode so
@@ -169,8 +168,16 @@ never transmits (Principle VI).
   pressed on a sleeping amplifier greyed and then recovered when the amplifier
   woke, with no error shown. `/tuner`, `/data` and `/operate-mode` returned
   identical values awake and asleep, so the applet cannot know the amplifier is
-  asleep, and ATU IN can show while the tuner is not in line. Writes therefore
-  get a 9 s transfer timeout.
+  asleep, and ATU IN can show while the tuner is not in line. The amplifier's
+  web server (Python wsgiref) logs a BrokenPipeError for every connection the
+  client closed before the answer, and a client that gave up on slow replies and
+  retried every 5 s kept it from answering for about ten minutes (once until the
+  amplifier was restarted; found with FlexWeb). So requests are not abandoned
+  while the amplifier is merely slow (15 s, 20 s deadline), reconnect backs off
+  5 s, 15 s, 30 s, then 60 s while it is unreachable (reset on success), and a
+  failed keep-awake request does not count toward the three consecutive failures
+  that declare the link down. The cost is that a dead link takes longer to be
+  noticed, up to three 15 s timeouts.
 - **Keep-awake (opt-in).** Because a sleeping RF2K-S drops its tuner to bypass
   (the SWR rises and relays click), a Radio Setup checkbox, **Keep the amplifier
   awake while connected** (`Rfkit/KeepAwake`, off by default), sends

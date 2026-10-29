@@ -36,10 +36,11 @@ RfkitConnection::RfkitConnection(QObject* parent)
     // same precedent as every other peripheral connection here, for a device
     // that may legitimately be power-cycling.
     m_reconnectTimer.setSingleShot(true);
-    m_reconnectTimer.setInterval(kReconnectIntervalMs);
     connect(&m_reconnectTimer, &QTimer::timeout, this, [this]() {
         if (m_connected || m_lastHost.isEmpty()) { return; }
+        m_retrying = true;
         connectNetwork(m_lastHost, m_lastPort);
+        m_retrying = false;
     });
 
     m_pollTimer.setInterval(pollIntervalMs());
@@ -85,6 +86,7 @@ void RfkitConnection::connectNetwork(const QString& host, quint16 port)
     m_lastHost = trimmed;
     m_lastPort = port;
     m_deliberateDisconnect = false;
+    if (!m_retrying) { m_reconnectAttempt = 0; }  // a connect the operator asked for
     m_reconnectTimer.stop();
     resetSession();
 
@@ -119,6 +121,7 @@ void RfkitConnection::disconnect()
     // emits disconnected() leaves the applet stuck showing "Connected".
     const bool wasConnected = m_connected;
     m_deliberateDisconnect = true;
+    m_reconnectAttempt = 0;
     m_reconnectTimer.stop();
     m_connected = false;
     resetSession();  // bumps the epoch: a pending request must not resurrect this
@@ -181,9 +184,7 @@ void RfkitConnection::pump()
     QUrl url = m_baseUrl;
     url.setPath(request.path);
     QNetworkRequest netRequest(url);
-    const bool isWrite = request.method == Request::Method::Put
-        || request.method == Request::Method::Post;
-    netRequest.setTransferTimeout(isWrite ? kCommandTimeoutMs : kRequestTimeoutMs);
+    netRequest.setTransferTimeout(request.probe ? kProbeTimeoutMs : kRequestTimeoutMs);
     // Any PUT wakes the amplifier and resets its sleep timer, so it also stands
     // in for the next keep-awake request.
     if (request.method == Request::Method::Put && m_keepAwakeTimer.isActive()) {
@@ -417,6 +418,7 @@ void RfkitConnection::onProbeSucceeded()
 {
     m_connected = true;
     m_consecutiveFailures = 0;
+    m_reconnectAttempt = 0;
     m_pollSlot = 0;
     qCInfo(lcTuner) << "RfkitConnection: connected to" << description()
                     << (m_status.info ? m_status.info->device : QString());
@@ -467,13 +469,19 @@ void RfkitConnection::onTransportFailure(const QString& errorString, const Reque
     if (isTuneStart(request)) {
         m_tuneStartPending = false;
     }
-    if (request.keepAlive) {
-        m_keepAlivePending = false;
-    }
     if (request.probe || !m_connected) {
+        if (request.keepAlive) { m_keepAlivePending = false; }
         resetSession();
         emit connectionFailed(errorString);
         if (!m_deliberateDisconnect && m_autoReconnect) { armReconnect(); }
+        return;
+    }
+    if (request.keepAlive) {
+        // A failed keep-awake is not evidence the link is down (the amplifier can
+        // be slow to answer while it wakes), and the polls will say if it is. It
+        // is simply tried again at the next interval.
+        m_keepAlivePending = false;
+        pump();
         return;
     }
     if (++m_consecutiveFailures >= kMaxConsecutiveFailures) {
@@ -501,7 +509,8 @@ void RfkitConnection::onTransportDown(const QString& errorString)
 void RfkitConnection::armReconnect()
 {
     if (!m_reconnectTimer.isActive()) {
-        m_reconnectTimer.start();
+        m_reconnectTimer.start(Rfkit::reconnectDelayMs(m_reconnectAttempt));
+        if (m_reconnectAttempt < 1000) { ++m_reconnectAttempt; }
     }
 }
 

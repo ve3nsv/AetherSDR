@@ -424,6 +424,14 @@ QByteArray buildKeepAwakeBody()
     return QJsonDocument(QJsonObject()).toJson(QJsonDocument::Compact);
 }
 
+int reconnectDelayMs(int attempt)
+{
+    static constexpr int kDelays[] = {5000, 15000, 30000, 60000};
+    if (attempt < 0) { attempt = 0; }
+    constexpr int last = static_cast<int>(sizeof(kDelays) / sizeof(kDelays[0])) - 1;
+    return kDelays[attempt > last ? last : attempt];
+}
+
 const char* pollPath(bool transmitting, int slot)
 {
     // Receiving: /power every other tick, /data twice and each configuration

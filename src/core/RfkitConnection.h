@@ -156,21 +156,27 @@ private:
     int m_consecutiveFailures{0};
     static constexpr int kMaxConsecutiveFailures = 3;
 
-    // Per-request transfer timeout. Also bounds the connect handshake, so an
-    // unreachable address reports failure here rather than after the OS TCP
-    // connect timeout (~21s on Windows).
-    static constexpr int kRequestTimeoutMs = 4000;
-    // Writes get longer: every PUT handler on the server wakes a sleeping
-    // amplifier before it answers, and a bare PUT /tuner took about 5 s on an
-    // RF2K-S that was asleep. Still inside the whole-request deadline below.
-    static constexpr int kCommandTimeoutMs = 9000;
+    // The connect handshake gets a short transfer timeout, so an unreachable
+    // address reports failure here rather than after the OS TCP connect timeout
+    // (~21s on Windows).
+    static constexpr int kProbeTimeoutMs = 4000;
+    // Every other request waits much longer: the amplifier's web server logs a
+    // BrokenPipeError for each connection the client closed before the answer,
+    // and giving up on a slow reply (it can be busy with a ~5 s wake started by
+    // another client, and a PUT to a sleeping amplifier takes that long itself)
+    // has left it unresponsive for minutes. Never abandon a request while the
+    // amplifier is merely slow.
+    static constexpr int kRequestTimeoutMs = 15000;
     // The transfer timeout above only fires when no bytes move; this bounds the
     // whole request, so a peer that trickles bytes cannot hold the one serialized
     // slot (and every command queued behind it) indefinitely. Principle VII.
-    static constexpr int kRequestDeadlineMs = 10000;
+    static constexpr int kRequestDeadlineMs = 20000;
 
     QTimer m_reconnectTimer;
-    static constexpr int kReconnectIntervalMs = 5000;
+    // Backs off with each failed attempt (Rfkit::reconnectDelayMs); reset on a
+    // successful connect or a deliberate disconnect.
+    int m_reconnectAttempt{0};
+    bool m_retrying{false};  // inside the reconnect timer's own connectNetwork()
 
     // One endpoint per tick from the schedule in RfkitProtocol.h (pollPath()),
     // 150 ms receiving and 15 ms transmitting.
