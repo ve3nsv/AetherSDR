@@ -249,6 +249,7 @@ the conservative reading and each is a one-line change:
    intervals may want raising. The cost on the amplifier's CPU of the faster
    schedule is untested here; on a FlexWeb build of the same schedule it did not
    change the amplifier's CPU load.
-6. How long a PUT takes on an awake amplifier. Only the asleep case (about 5 s)
-   was timed. If an awake PUT is also slow, the keep-awake request would stall
-   the meters once a minute.
+6. How long a PUT takes on an awake amplifier: measured at 30 to 50 ms
+   (`PUT /tuner {}`, four runs on an RF2K-S), against about 5 s when the
+   amplifier was asleep, so the delay is the wake and the once-a-minute
+   keep-awake request does not stall the meters.
