@@ -1625,6 +1625,27 @@ void RadioSetupDialog::buildRfkitDevice(PeripheralDeviceUi& ui, QWidget* stackPa
     addFormRow(detail, tr("IP Address"), ui.addressEdit);
     addFormRow(detail, tr("Port"), ui.portSpin);
 
+    // Opt-in: it overrides the amplifier's own sleep timer. Only an amplifier
+    // whose REST server accepts PUT /tuner (the same modified server that gives
+    // the TUNE button) can be kept awake; a stock one has no such request.
+    auto* keepAwake = new QCheckBox(tr("Keep the amplifier awake while connected"));
+    keepAwake->setObjectName(QStringLiteral("rfkitKeepAwake"));
+    keepAwake->setAccessibleName(tr("Keep the RF-KIT amplifier awake while connected"));
+    keepAwake->setToolTip(
+        tr("Sends a harmless request once a minute so the amplifier's sleep timer "
+           "never runs out. A sleeping RF2K-S drops its tuner to bypass. Works only "
+           "on an amplifier whose REST server accepts a tune request (the same one "
+           "that shows the TUNE button); a stock amplifier is not affected. Off by "
+           "default."));
+    keepAwake->setChecked(PeripheralSettings::deviceInt("Rfkit", "KeepAwake", 0) != 0);
+    connect(keepAwake, &QCheckBox::toggled, this, [this](bool on) {
+        PeripheralSettings::setDeviceInt("Rfkit", "KeepAwake", on ? 1 : 0);
+        if (m_rfkit) {
+            m_rfkit->setKeepAwake(on);
+        }
+    });
+    addFormRow(detail, tr("Sleep"), keepAwake);
+
     m_peripheralRowSavers.append([u]() {
         if (!u->addressEdit || !u->addressEdit->text().trimmed().isEmpty()) {
             return;

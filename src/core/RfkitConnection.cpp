@@ -15,28 +15,14 @@ QString path(const char* literal)
     return QString::fromLatin1(literal);
 }
 
-// One of these per tick, round-robin, alongside /power and /data. They are
-// configuration-style readbacks that change only when the operator (or the
-// radio's band data) changes them, so a ~1s full cycle is plenty and it keeps
-// the request rate on a small embedded controller low.
-const QStringList& slowPollPaths()
-{
-    static const QStringList kSlow{
-        path(Rfkit::kPathOperateMode),
-        path(Rfkit::kPathAntennas),
-        path(Rfkit::kPathTuner),
-        path(Rfkit::kPathInterface),
-    };
-    return kSlow;
-}
-
 }  // namespace
 
 // The tune start itself: a PUT /tuner (the discovery probe is an OPTIONS).
 bool RfkitConnection::isTuneStart(const Request& request)
 {
     return request.method == Request::Method::Put
-        && request.path == QLatin1String(Rfkit::kPathTuner) && !request.tuneProbe;
+        && request.path == QLatin1String(Rfkit::kPathTuner) && !request.tuneProbe
+        && !request.keepAlive;
 }
 
 RfkitConnection::RfkitConnection(QObject* parent)
@@ -56,8 +42,11 @@ RfkitConnection::RfkitConnection(QObject* parent)
         connectNetwork(m_lastHost, m_lastPort);
     });
 
-    m_pollTimer.setInterval(kPollIntervalMs);
+    m_pollTimer.setInterval(pollIntervalMs());
     connect(&m_pollTimer, &QTimer::timeout, this, &RfkitConnection::poll);
+
+    m_keepAwakeTimer.setInterval(Rfkit::kKeepAwakeIntervalMs);
+    connect(&m_keepAwakeTimer, &QTimer::timeout, this, &RfkitConnection::sendKeepAlive);
 
     m_deadlineTimer.setSingleShot(true);
     m_deadlineTimer.setInterval(kRequestDeadlineMs);
@@ -144,6 +133,8 @@ void RfkitConnection::resetSession()
 {
     ++m_epoch;
     m_pollTimer.stop();
+    m_keepAwakeTimer.stop();
+    m_keepAlivePending = false;
     m_deadlineTimer.stop();
     m_queue.clear();
     m_inFlight = false;
@@ -156,7 +147,7 @@ void RfkitConnection::resetSession()
     m_lastBody.clear();
     m_warnedPaths.clear();
     m_consecutiveFailures = 0;
-    m_slowPollIndex = 0;
+    m_pollSlot = 0;
     m_tuneProbePending = false;
     m_tuneStartPending = false;
     m_tuneProbeAttempts = 0;
@@ -190,7 +181,14 @@ void RfkitConnection::pump()
     QUrl url = m_baseUrl;
     url.setPath(request.path);
     QNetworkRequest netRequest(url);
-    netRequest.setTransferTimeout(kRequestTimeoutMs);
+    const bool isWrite = request.method == Request::Method::Put
+        || request.method == Request::Method::Post;
+    netRequest.setTransferTimeout(isWrite ? kCommandTimeoutMs : kRequestTimeoutMs);
+    // Any PUT wakes the amplifier and resets its sleep timer, so it also stands
+    // in for the next keep-awake request.
+    if (request.method == Request::Method::Put && m_keepAwakeTimer.isActive()) {
+        m_keepAwakeTimer.start();
+    }
     netRequest.setRawHeader("Accept", "application/json");
     // No redirects: a device that redirects is not speaking this API.
     netRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
@@ -284,6 +282,18 @@ void RfkitConnection::onReplyFinished(QNetworkReply* reply, const Request& reque
                                 : "unknown") << "(HTTP" << http << ")";
             emit statusUpdated(m_status);
         }
+        syncKeepAwake();
+        pump();
+        return;
+    }
+
+    if (request.keepAlive) {
+        // Any answer means the handler ran, which is all this request is for: the
+        // server resets the amplifier's sleep timer before it reads the body, and
+        // answers {} with a 400 (or a 200 naming OFF/BYPASS). Nothing in the
+        // reply is state, and it is never read as one.
+        m_keepAlivePending = false;
+        qCDebug(lcTuner) << "RfkitConnection: keep-awake answered, HTTP" << http;
         pump();
         return;
     }
@@ -348,22 +358,22 @@ bool RfkitConnection::applyReply(const Request& request, const QByteArray& body)
     if (request.method == Request::Method::Post) {
         // POST /error/reset. Nothing in the reply is needed; re-read what an
         // error can have changed.
-        enqueue(Request{Request::Method::Get, path(Rfkit::kPathData), {}, false, false, false});
-        enqueue(Request{Request::Method::Get, path(Rfkit::kPathInterface), {}, false, false, false});
+        enqueue(Request{Request::Method::Get, path(Rfkit::kPathData), {}, false, false, false, false});
+        enqueue(Request{Request::Method::Get, path(Rfkit::kPathInterface), {}, false, false, false, false});
         return false;
     }
     if (request.method == Request::Method::Put && p == QLatin1String(Rfkit::kPathTuner)) {
         // PUT /tuner {"tuner_mode":"START"}. The reply is not trusted as the
         // new state (Principle II): read the tuner and the status text back.
-        enqueue(Request{Request::Method::Get, path(Rfkit::kPathTuner), {}, false, false, false});
-        enqueue(Request{Request::Method::Get, path(Rfkit::kPathData), {}, false, false, false});
+        enqueue(Request{Request::Method::Get, path(Rfkit::kPathTuner), {}, false, false, false, false});
+        enqueue(Request{Request::Method::Get, path(Rfkit::kPathData), {}, false, false, false, false});
         return false;
     }
     if (request.method == Request::Method::Put && p == QLatin1String(Rfkit::kPathAntennaActive)) {
         // The reply names only the new active antenna; the per-antenna states
         // come from the list. Re-read it whatever the reply looks like: a 2xx
         // means the switch was accepted, and the highlight must follow it.
-        enqueue(Request{Request::Method::Get, path(Rfkit::kPathAntennas), {}, false, false, false});
+        enqueue(Request{Request::Method::Get, path(Rfkit::kPathAntennas), {}, false, false, false, false});
         if (!Rfkit::parseAntenna(body)) {
             return malformed();
         }
@@ -407,9 +417,10 @@ void RfkitConnection::onProbeSucceeded()
 {
     m_connected = true;
     m_consecutiveFailures = 0;
-    m_slowPollIndex = 0;
+    m_pollSlot = 0;
     qCInfo(lcTuner) << "RfkitConnection: connected to" << description()
                     << (m_status.info ? m_status.info->device : QString());
+    m_pollTimer.setInterval(pollIntervalMs());
     m_pollTimer.start();
     emit connected();
     // Read everything once so the applet fills in immediately instead of
@@ -425,7 +436,7 @@ void RfkitConnection::enqueueFullRefresh()
         Rfkit::kPathAntennas, Rfkit::kPathTuner, Rfkit::kPathInterface,
     };
     for (const char* literal : kPaths) {
-        enqueue(Request{Request::Method::Get, path(literal), {}, false, false, false});
+        enqueue(Request{Request::Method::Get, path(literal), {}, false, false, false, false});
     }
     maybeProbeTuneApi();
 }
@@ -455,6 +466,9 @@ void RfkitConnection::onTransportFailure(const QString& errorString, const Reque
     }
     if (isTuneStart(request)) {
         m_tuneStartPending = false;
+    }
+    if (request.keepAlive) {
+        m_keepAlivePending = false;
     }
     if (request.probe || !m_connected) {
         resetSession();
@@ -498,11 +512,11 @@ void RfkitConnection::poll()
     if (!m_connected || m_inFlight || !m_queue.isEmpty()) {
         return;
     }
-    enqueue(Request{Request::Method::Get, path(Rfkit::kPathPower), {}, false, false, false});
-    enqueue(Request{Request::Method::Get, path(Rfkit::kPathData), {}, false, false, false});
-    const QStringList& slow = slowPollPaths();
-    enqueue(Request{Request::Method::Get, slow.at(m_slowPollIndex % slow.size()), {}, false, false, false});
-    m_slowPollIndex = (m_slowPollIndex + 1) % slow.size();
+    enqueue(Request{Request::Method::Get, path(Rfkit::pollPath(m_transmitting, m_pollSlot)),
+                    {}, false, false, false, false});
+    // 12 and 5 both divide 60, so the position survives a change of schedule
+    // without ever overflowing.
+    m_pollSlot = (m_pollSlot + 1) % (Rfkit::kRxPollSlots * Rfkit::kTxPollSlots);
     maybeProbeTuneApi();
 }
 
@@ -576,6 +590,59 @@ void RfkitConnection::startTune()
     request.method = Request::Method::Put;
     request.path = path(Rfkit::kPathTuner);
     request.body = Rfkit::buildTunerStartBody();
+    enqueue(request, true);
+}
+
+int RfkitConnection::pollIntervalMs() const
+{
+    return m_transmitting ? Rfkit::kTxPollIntervalMs : Rfkit::kRxPollIntervalMs;
+}
+
+void RfkitConnection::setTransmitting(bool transmitting)
+{
+    if (transmitting == m_transmitting) {
+        return;
+    }
+    m_transmitting = transmitting;
+    m_pollSlot = 0;
+    // Changing the interval of a running timer restarts it at the new rate.
+    m_pollTimer.setInterval(pollIntervalMs());
+}
+
+void RfkitConnection::setKeepAwake(bool on)
+{
+    m_keepAwake = on;
+    syncKeepAwake();
+}
+
+void RfkitConnection::syncKeepAwake()
+{
+    const bool active = m_keepAwake && m_connected
+        && m_status.tuneApi == Rfkit::TuneApi::Supported;
+    if (!active) {
+        m_keepAwakeTimer.stop();
+        return;
+    }
+    if (!m_keepAwakeTimer.isActive()) {
+        m_keepAwakeTimer.start();
+        sendKeepAlive();  // wake it now, not a minute from now
+    }
+}
+
+void RfkitConnection::sendKeepAlive()
+{
+    // Never while the radio is transmitting (a slow reply would stall the fast
+    // power polling), with one already outstanding, or around a tune start.
+    if (!m_keepAwake || !m_connected || m_status.tuneApi != Rfkit::TuneApi::Supported
+        || m_keepAlivePending || m_tuneStartPending || m_transmitting) {
+        return;
+    }
+    m_keepAlivePending = true;
+    Request request;
+    request.method = Request::Method::Put;
+    request.path = path(Rfkit::kPathTuner);
+    request.body = Rfkit::buildKeepAwakeBody();
+    request.keepAlive = true;
     enqueue(request, true);
 }
 

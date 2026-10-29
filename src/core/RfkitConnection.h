@@ -70,6 +70,21 @@ public:
     // carrier is already being transmitted. Nothing here keys the radio.
     void startTune();
 
+    // Tells the connection whether the radio is transmitting (MOX, TUNE or any
+    // other transmit), so it can poll faster while power and SWR are moving. It
+    // only chooses the polling cadence: nothing here keys the radio.
+    void setTransmitting(bool transmitting);
+    // While on, and the amplifier's REST server was found to accept PUT /tuner,
+    // sends PUT /tuner {} as soon as that is known and then once a minute. On the
+    // server inspected the PUT handlers reset the amplifier's sleep timer and wake
+    // its sleep screen before they read the body, and {} is not a tune start, so
+    // this keeps the amplifier from going to sleep (a sleeping RF2K-S drops its
+    // tuner to bypass) while AetherSDR is connected. Off by default: it overrides
+    // the owner's sleep setting, and a stock amplifier has no such PUT route, so
+    // it does nothing there. Skipped while transmitting.
+    void setKeepAwake(bool on);
+    bool keepAwake() const { return m_keepAwake; }
+
 signals:
     void connected();
     void disconnected();
@@ -86,6 +101,7 @@ private:
         bool probe{false};  // the connect handshake (GET /info)
         bool command{false};  // operator-issued; kept in issue order ahead of polls
         bool tuneProbe{false};  // OPTIONS /tuner: does this server have a PUT route?
+        bool keepAlive{false};  // PUT /tuner {}: wakes the amplifier, never starts a tune
     };
 
     static bool isTuneStart(const Request& request);
@@ -103,6 +119,11 @@ private:
     // Unknown, at most kMaxTuneProbes times per session, and never with one
     // already outstanding.
     void maybeProbeTuneApi();
+    // Sends one keep-awake request when enabled, supported, connected, idle and
+    // not transmitting; and starts or stops the repeat timer to match.
+    void syncKeepAwake();
+    void sendKeepAlive();
+    int pollIntervalMs() const;
     void armReconnect();
     void resetSession();
 
@@ -139,6 +160,10 @@ private:
     // unreachable address reports failure here rather than after the OS TCP
     // connect timeout (~21s on Windows).
     static constexpr int kRequestTimeoutMs = 4000;
+    // Writes get longer: every PUT handler on the server wakes a sleeping
+    // amplifier before it answers, and a bare PUT /tuner took about 5 s on an
+    // RF2K-S that was asleep. Still inside the whole-request deadline below.
+    static constexpr int kCommandTimeoutMs = 9000;
     // The transfer timeout above only fires when no bytes move; this bounds the
     // whole request, so a peer that trickles bytes cannot hold the one serialized
     // slot (and every command queued behind it) indefinitely. Principle VII.
@@ -147,12 +172,18 @@ private:
     QTimer m_reconnectTimer;
     static constexpr int kReconnectIntervalMs = 5000;
 
-    // /power and /data every tick; one of the slower, configuration-style
-    // endpoints per tick in rotation (see poll()).
+    // One endpoint per tick from the schedule in RfkitProtocol.h (pollPath()),
+    // 150 ms receiving and 15 ms transmitting.
     QTimer m_pollTimer;
     QTimer m_deadlineTimer;
-    static constexpr int kPollIntervalMs = 250;
-    int m_slowPollIndex{0};
+    int m_pollSlot{0};
+    // Kept across sessions: the radio's transmit state does not depend on the
+    // amplifier link.
+    bool m_transmitting{false};
+
+    bool m_keepAwake{false};
+    bool m_keepAlivePending{false};
+    QTimer m_keepAwakeTimer;
 
     bool m_tuneProbePending{false};
     // A START is outstanding (queued or in flight). The tuner readback that

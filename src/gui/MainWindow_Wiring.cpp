@@ -7409,13 +7409,18 @@ void MainWindow::wireMeters()
     // signal wiring first, the auto-connect trigger LAST, so nothing misses
     // the first connected().
     //
-    // Deliberately absent from this block: any transmit-path wiring (the API
-    // has no keying endpoint; the tune request below only asks the amplifier to
-    // tune and keys nothing), and any control of the operational interface (it
-    // can cut the amp off from the radio that drives it).
+    // Deliberately absent from this block: any transmit-path wiring that could
+    // key the radio (the API has no keying endpoint; the tune request below only
+    // asks the amplifier to tune and keys nothing), and any control of the
+    // operational interface (it can cut the amp off from the radio that drives
+    // it). The radio's transmit state is only read, below, to pick the polling
+    // rate.
     connect(&m_rfkitConn, &RfkitConnection::connected, this, [this]() {
         m_appletPanel->rfkitApplet()->setConnected(true);
         m_appletPanel->setRfkitVisible(true);
+        // Read at each connect so a change in Radio Setup applies next time.
+        m_rfkitConn.setKeepAwake(
+            PeripheralSettings::deviceInt("Rfkit", "KeepAwake", 0) != 0);
     });
     connect(&m_rfkitConn, &RfkitConnection::disconnected, this, [this]() {
         m_appletPanel->rfkitApplet()->setConnected(false);
@@ -7439,6 +7444,22 @@ void MainWindow::wireMeters()
     connect(m_appletPanel->rfkitApplet(), &RfkitApplet::tuneRequested, this, [this]() {
         m_rfkitConn.startTune();
     });
+    // Poll the amplifier faster while the radio transmits, when its power and
+    // SWR are moving. Same gate as the VFO widget's transmit indicator.
+    {
+        auto updateRfkitTx = [this]() {
+            const auto& tx = m_radioModel.transmitModel();
+            m_rfkitConn.setTransmitting(tx.isTransmitting() || tx.isTuning()
+                                        || m_radioModel.isRadioTransmitting());
+        };
+        connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
+                this, [updateRfkitTx](bool) { updateRfkitTx(); });
+        connect(&m_radioModel.transmitModel(), &TransmitModel::tuneChanged,
+                this, [updateRfkitTx](bool) { updateRfkitTx(); });
+        connect(&m_radioModel, &RadioModel::radioTransmittingChanged,
+                this, [updateRfkitTx](bool) { updateRfkitTx(); });
+        updateRfkitTx();
+    }
 
     // Startup auto-connect from saved Peripherals settings — same reasoning as
     // the other direct amplifiers: the Flex radio has no idea this amplifier

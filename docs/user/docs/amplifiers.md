@@ -416,6 +416,18 @@ The **RF-KIT Amplifier** applet:
   decision. The manual's procedure is to put the amplifier in standby first. The
   tuner can be switched off per band on the amplifier (Menu → Settings → Tuner →
   Tuner On/Off), which is when you will see **ATU OFF**.
+- **Polling:** the applet reads the amplifier every 150 ms while the radio is
+  receiving and every 15 ms while it transmits (the amplifier answers one request
+  at a time, so the real rate is whatever it can sustain), so the meters follow
+  power and SWR closely during a transmission.
+- **Keep the amplifier awake:** in **Radio Setup → Peripherals → RF-KIT
+  Amplifier**, the **Sleep** checkbox, off by default, sends a harmless request
+  once a minute so the amplifier's sleep timer never runs out. A sleeping RF2K-S
+  drops its tuner to bypass, so you will see a high SWR if you transmit into it.
+  It works only on an amplifier whose REST server accepts a tune request (the one
+  that shows TUNE); a stock amplifier is not affected and still sleeps. It
+  overrides the amplifier's own sleep setting while AetherSDR is connected, and
+  waits while you transmit. Changing it applies at once.
 - The amplifier's own status text and, when it reports one, an error banner.
 - **OPERATE / STANDBY**, **TUNE** and **RESET** share one row at one width. The
   OPERATE label changes only when the amplifier confirms.

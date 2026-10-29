@@ -395,6 +395,42 @@ int main()
                round.has_value() && *round == Antenna{AntennaType::External, 0});
     }
 
+    // ── Polling schedule and keep-awake body ──────────────────────────────
+    {
+        const auto tally = [](bool tx, int slots, const char* wanted) {
+            int n = 0;
+            for (int i = 0; i < slots; ++i) {
+                if (QByteArray(pollPath(tx, i)) == QByteArray(wanted)) { ++n; }
+            }
+            return n;
+        };
+        report("receiving: /power every other tick, 6 in 12",
+               tally(false, kRxPollSlots, kPathPower) == 6);
+        report("receiving: /data twice per cycle", tally(false, kRxPollSlots, kPathData) == 2);
+        report("receiving: each configuration readback once per cycle",
+               tally(false, kRxPollSlots, kPathOperateMode) == 1
+                   && tally(false, kRxPollSlots, kPathAntennas) == 1
+                   && tally(false, kRxPollSlots, kPathTuner) == 1
+                   && tally(false, kRxPollSlots, kPathInterface) == 1);
+        report("transmitting: four /power reads to one /tuner read in 5",
+               tally(true, kTxPollSlots, kPathPower) == 4
+                   && tally(true, kTxPollSlots, kPathTuner) == 1);
+        report("the schedule wraps and tolerates any slot number",
+               QByteArray(pollPath(false, 0)) == QByteArray(pollPath(false, kRxPollSlots))
+                   && QByteArray(pollPath(true, 2)) == QByteArray(pollPath(true, 2 + 5 * kTxPollSlots))
+                   && pollPath(false, 7919) != nullptr && pollPath(true, 0) != nullptr);
+        report("polling rates are 150 ms receiving and 15 ms transmitting",
+               kRxPollIntervalMs == 150 && kTxPollIntervalMs == 15);
+        report("keep-awake repeats well inside the amplifier's 3-minute minimum sleep",
+               kKeepAwakeIntervalMs > 0 && kKeepAwakeIntervalMs <= 90 * 1000);
+        // {} must never be, or contain, a tune start.
+        const QByteArray keep = buildKeepAwakeBody();
+        const QJsonObject keepObj = QJsonDocument::fromJson(keep).object();
+        report("the keep-awake body is an empty JSON object, not a tune start",
+               keepObj.isEmpty() && keep != buildTunerStartBody()
+                   && !keep.contains("START"));
+    }
+
     // ── Presentation helpers ──────────────────────────────────────────────
     report("temperature in °C passes through", nearlyEqual(temperatureCelsius({40.0f, "°C"}), 40.0f));
     report("temperature in °F is converted", nearlyEqual(temperatureCelsius({104.0f, "°F"}), 40.0f));

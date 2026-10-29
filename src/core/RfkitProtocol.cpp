@@ -419,6 +419,30 @@ QByteArray buildTunerStartBody()
     return QJsonDocument(o).toJson(QJsonDocument::Compact);
 }
 
+QByteArray buildKeepAwakeBody()
+{
+    return QJsonDocument(QJsonObject()).toJson(QJsonDocument::Compact);
+}
+
+const char* pollPath(bool transmitting, int slot)
+{
+    // Receiving: /power every other tick, /data twice and each configuration
+    // readback once per 12 ticks (1.8 s at 150 ms).
+    static const char* const kRx[kRxPollSlots] = {
+        kPathPower, kPathData,      kPathPower, kPathOperateMode,
+        kPathPower, kPathAntennas,  kPathPower, kPathTuner,
+        kPathPower, kPathData,      kPathPower, kPathInterface,
+    };
+    // Transmitting: power and SWR as fast as the amplifier answers, with the
+    // tuner state in between.
+    static const char* const kTx[kTxPollSlots] = {
+        kPathPower, kPathPower, kPathTuner, kPathPower, kPathPower,
+    };
+    const int n = transmitting ? kTxPollSlots : kRxPollSlots;
+    const int i = ((slot % n) + n) % n;
+    return transmitting ? kTx[i] : kRx[i];
+}
+
 TuneApi classifyTuneProbe(int httpStatus, const QByteArray& allowHeader)
 {
     if (httpStatus == 404 || httpStatus == 501) {

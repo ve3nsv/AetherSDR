@@ -447,6 +447,139 @@ int main(int argc, char** argv)
         report("startTune after a disconnect is dropped", amp.requests.size() == after);
     }
 
+    // ── Keep-awake: a PUT /tuner {} that wakes the amplifier and starts nothing ─
+    {
+        // Off by default: a modified server gets no PUT unless asked.
+        StubAmp amp;
+        amp.routes["OPTIONS /tuner"] = {405, "Method Not Allowed", "GET,PUT"};
+        RfkitConnection conn;
+        QSignalSpy connectedSpy(&conn, &RfkitConnection::connected);
+        QSignalSpy statusSpy(&conn, &RfkitConnection::statusUpdated);
+        conn.connectNetwork(QStringLiteral("127.0.0.1"), amp.port());
+        spin([&] { return connectedSpy.count() > 0; });
+        spin([&] {
+            return !statusSpy.isEmpty()
+                && statusSpy.last().at(0).value<Rfkit::Status>().tuneApi == Rfkit::TuneApi::Supported;
+        });
+        spinFor(300);
+        report("keep-awake is off by default: no PUT is sent", amp.count("PUT /tuner") == 0);
+        conn.disconnect();
+    }
+    {
+        // On, supported: one request as soon as support is known, and it is {}.
+        StubAmp amp;
+        amp.routes["OPTIONS /tuner"] = {405, "Method Not Allowed", "GET,PUT"};
+        amp.routes["PUT /tuner"] = {400, R"({"status":"400 Bad Request","reason":"START required"})"};
+        RfkitConnection conn;
+        QSignalSpy connectedSpy(&conn, &RfkitConnection::connected);
+        QSignalSpy statusSpy(&conn, &RfkitConnection::statusUpdated);
+        conn.setKeepAwake(true);
+        conn.connectNetwork(QStringLiteral("127.0.0.1"), amp.port());
+        report("keep-awake sends PUT /tuner once the server is found to accept PUT",
+               spin([&] { return amp.count("PUT /tuner") >= 1; }));
+        report("the keep-awake body is {} and never START",
+               amp.bodies.value("PUT /tuner") == QByteArray("{}"));
+        spinFor(400);
+        report("a refused (400) keep-awake is not an error: the link stays up",
+               conn.isConnected() && amp.count("PUT /tuner") == 1);
+        const auto tunerMode = [&]() {
+            if (statusSpy.isEmpty()) { return Rfkit::TunerMode::Unknown; }
+            const auto st = statusSpy.last().at(0).value<Rfkit::Status>();
+            return st.tuner ? st.tuner->mode : Rfkit::TunerMode::Unknown;
+        };
+        report("the keep-awake reply is not read as state",
+               spin([&] { return tunerMode() == Rfkit::TunerMode::Auto; }));
+        // A real tune start still works after it, and is the only START.
+        conn.startTune();
+        report("a tune start still goes out after a keep-awake",
+               spin([&] { return amp.count("PUT /tuner") == 2; })
+                   && amp.bodies.value("PUT /tuner") == QByteArray(R"({"tuner_mode":"START"})"));
+        report("keep-awake honored serialization", amp.maxOutstanding == 1);
+        // Turning it off does not send anything.
+        conn.setKeepAwake(false);
+        spinFor(300);
+        report("turning keep-awake off sends nothing", amp.count("PUT /tuner") == 2);
+        conn.disconnect();
+    }
+    {
+        // A stock server: no PUT in Allow, so keep-awake has nothing to send.
+        StubAmp amp;
+        amp.routes["OPTIONS /tuner"] = {405, "Method Not Allowed", "GET"};
+        RfkitConnection conn;
+        QSignalSpy connectedSpy(&conn, &RfkitConnection::connected);
+        conn.setKeepAwake(true);
+        conn.connectNetwork(QStringLiteral("127.0.0.1"), amp.port());
+        spin([&] { return connectedSpy.count() > 0; });
+        spin([&] { return amp.count("OPTIONS /tuner") >= 1; });
+        spinFor(400);
+        report("keep-awake never sends a PUT to a server that does not allow it",
+               amp.count("PUT /tuner") == 0);
+        conn.disconnect();
+    }
+    {
+        // Enabling it after connect wakes the amplifier at once.
+        StubAmp amp;
+        amp.routes["OPTIONS /tuner"] = {405, "Method Not Allowed", "GET,PUT"};
+        amp.routes["PUT /tuner"] = {400, R"({"status":"400 Bad Request","reason":"x"})"};
+        RfkitConnection conn;
+        QSignalSpy statusSpy(&conn, &RfkitConnection::statusUpdated);
+        conn.connectNetwork(QStringLiteral("127.0.0.1"), amp.port());
+        spin([&] {
+            return !statusSpy.isEmpty()
+                && statusSpy.last().at(0).value<Rfkit::Status>().tuneApi == Rfkit::TuneApi::Supported;
+        });
+        spinFor(200);
+        report("no PUT before keep-awake is enabled", amp.count("PUT /tuner") == 0);
+        conn.setKeepAwake(true);
+        report("enabling keep-awake on a live link sends the request",
+               spin([&] { return amp.count("PUT /tuner") == 1; }));
+        conn.disconnect();
+    }
+    {
+        // Never while the radio is transmitting.
+        StubAmp amp;
+        amp.routes["OPTIONS /tuner"] = {405, "Method Not Allowed", "GET,PUT"};
+        amp.routes["PUT /tuner"] = {400, R"({"status":"400 Bad Request","reason":"x"})"};
+        RfkitConnection conn;
+        QSignalSpy connectedSpy(&conn, &RfkitConnection::connected);
+        conn.setTransmitting(true);
+        conn.setKeepAwake(true);
+        conn.connectNetwork(QStringLiteral("127.0.0.1"), amp.port());
+        spin([&] { return connectedSpy.count() > 0; });
+        spin([&] { return amp.count("OPTIONS /tuner") >= 1; });
+        spinFor(400);
+        report("keep-awake is held back while transmitting", amp.count("PUT /tuner") == 0);
+        conn.disconnect();
+    }
+
+    // ── Polling is faster while transmitting ──────────────────────────────
+    {
+        StubAmp amp;
+        RfkitConnection conn;
+        QSignalSpy connectedSpy(&conn, &RfkitConnection::connected);
+        conn.connectNetwork(QStringLiteral("127.0.0.1"), amp.port());
+        spin([&] { return connectedSpy.count() > 0; });
+        spinFor(300);
+        const int rx0 = amp.count("GET /power");
+        spinFor(900);
+        const int rxReads = amp.count("GET /power") - rx0;
+        conn.setTransmitting(true);
+        spinFor(100);
+        const int tx0 = amp.count("GET /power");
+        spinFor(900);
+        const int txReads = amp.count("GET /power") - tx0;
+        report("transmitting polls /power at least twice as often as receiving",
+               rxReads >= 1 && txReads >= 2 * rxReads);
+        report("fast polling honored serialization", amp.maxOutstanding == 1);
+        conn.setTransmitting(false);
+        spinFor(100);
+        const int back0 = amp.count("GET /power");
+        spinFor(900);
+        report("the receive rate returns after transmit ends",
+               amp.count("GET /power") - back0 < txReads);
+        conn.disconnect();
+    }
+
     // ── A link that keeps dying mid-body is declared lost ─────────────────
     {
         StubAmp amp;

@@ -68,14 +68,23 @@ HTTP has no connection to be "up", so:
   the amplifier in click order); a poll round is only enqueued when the queue is empty, so a slow device
   lowers the poll rate instead of growing a backlog. The device is a small
   embedded controller.
-- Poll: `/power` and `/data` every 250 ms, plus one of `/operate-mode`,
-  `/antennas`, `/tuner`, `/operational-interface` per tick in rotation. A full
-  refresh runs once on connect so the applet fills immediately.
+- Poll: one GET per tick from a fixed cycle (`Rfkit::pollPath()`), at the
+  PgTg plugin's tick rates: 150 ms while the radio is receiving and 15 ms while
+  it transmits. Receiving, a 12-tick cycle reads `/power` six times, `/data`
+  twice and each of `/operate-mode`, `/antennas`, `/tuner` and
+  `/operational-interface` once (PgTg's exact slot order is not known, so that
+  spread is ours). Transmitting, a 5-tick cycle reads `/power` four times and
+  `/tuner` once, PgTg's mix. A tick that finds a request outstanding is skipped,
+  so the amplifier's own latency caps the rate. The radio's transmit state
+  (`TransmitModel` MOX, TUNE, or the radio's own transmit) is only read, by
+  `MainWindow_Wiring.cpp`, to call `setTransmitting()`; nothing keys the radio. A
+  full refresh runs once on connect so the applet fills immediately.
 - Each reply carries the session epoch it was issued under; a late reply from a
   previous session is discarded unread (#2380).
 - Boundary hygiene (Principle VII): bodies capped at 64 KiB (also enforced
-  while streaming), no redirects, no proxy, no cache, a 4 s transfer timeout (an
-  inactivity timeout) plus a 10 s deadline on the whole of every request, so a
+  while streaming), no redirects, no proxy, no cache, a 4 s transfer timeout for reads and 9 s for writes (an
+  inactivity timeout; every PUT wakes a sleeping amplifier first, which took about
+  5 s) plus a 10 s deadline on the whole of every request, so a
   peer that trickles bytes cannot hold the single serialized slot; a transfer
   that breaks after the headers counts as a transport failure, while an HTTP
   error status does not. The address field is built into a `QUrl` in strict mode so
@@ -160,8 +169,21 @@ never transmits (Principle VI).
   pressed on a sleeping amplifier greyed and then recovered when the amplifier
   woke, with no error shown. `/tuner`, `/data` and `/operate-mode` returned
   identical values awake and asleep, so the applet cannot know the amplifier is
-  asleep, and ATU IN can show while the tuner is not in line. Whether command
-  PUTs need a longer timeout is left open until a failure is observed.
+  asleep, and ATU IN can show while the tuner is not in line. Writes therefore
+  get a 9 s transfer timeout.
+- **Keep-awake (opt-in).** Because a sleeping RF2K-S drops its tuner to bypass
+  (the SWR rises and relays click), a Radio Setup checkbox, **Keep the amplifier
+  awake while connected** (`Rfkit/KeepAwake`, off by default), sends
+  `PUT /tuner {}` as soon as the probe finds PUT allowed and then once a minute
+  (the amplifier's shortest sleep setting is 3 minutes). It relies on the same
+  modified server as TUNE and on two facts read from its source: every PUT
+  handler calls `handle_sleep()` before looking at the body, and only
+  `{"tuner_mode":"START"}` starts a tune, so `{}` answers 400 (or 200 naming
+  OFF/BYPASS) and does nothing else. The reply is never read as state. It is
+  skipped while transmitting, with a tune start outstanding, or with one already
+  in flight; any other PUT restarts its timer. It does nothing on a stock server.
+  A different server variant that treated `{}` as a start would tune whenever a
+  carrier was present, which is why it is opt-in and a stated assumption.
 - **Protocol authority.** The PUT is not in the vendor document. Its source is
   a community modification of the amplifier's `restServer.py`, which is an
   additional protocol source that needs the maintainer's acceptance before this
@@ -222,6 +244,11 @@ the conservative reading and each is a one-line change:
 3. The `false` value in the tuner `mode` enum (a generator artifact in the
    document). Accepted as a boolean or the string `"false"` and shown as `OFF`.
 4. Whether the manual's eight error messages are the whole vocabulary; any non-empty status is treated as an error (§5).
-5. Real poll latency: if the device cannot sustain 250 ms rounds, the
-   serialization above degrades the rate gracefully, but the interval may want
-   raising.
+5. Real poll latency: if the device cannot sustain 150 ms receive or 15 ms
+   transmit rounds, the serialization above degrades the rate gracefully, but the
+   intervals may want raising. The cost on the amplifier's CPU of the faster
+   schedule is untested here; on a FlexWeb build of the same schedule it did not
+   change the amplifier's CPU load.
+6. How long a PUT takes on an awake amplifier. Only the asleep case (about 5 s)
+   was timed. If an awake PUT is also slow, the keep-awake request would stall
+   the meters once a minute.

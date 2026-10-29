@@ -230,6 +230,32 @@ QByteArray buildOperateModeBody(OperateMode mode);
 QByteArray buildAntennaBody(const Antenna& antenna);
 // {"tuner_mode":"START"}: the one body that starts a tune.
 QByteArray buildTunerStartBody();
+// The body of the keep-awake request: an empty JSON object. On the server
+// inspected, every PUT handler resets the amplifier's sleep timer and wakes its
+// sleep screen before it looks at the body, and PUT /tuner starts a tune only for
+// {"tuner_mode":"START"}, so {} wakes the amplifier and does nothing else
+// (400, or 200 naming OFF/BYPASS). Never a tune start; see RfkitConnection.
+QByteArray buildKeepAwakeBody();
+
+// ── Polling schedule ─────────────────────────────────────────────────────
+// One GET per tick, in a fixed cycle, so the request rate on the amplifier's
+// small controller is set by the tick and not by how many endpoints exist. The
+// tick rates are the ones the PgTg plugin (v1.1.6) uses: 150 ms receiving and
+// 15 ms transmitting. The transmit cycle is its mix too (four /power reads to one
+// /tuner read); the receive cycle below is our own spread of the endpoints this
+// applet shows, because PgTg's exact slot order is not known. A tick that finds a
+// request still outstanding is skipped, so a slow amplifier lowers the rate and
+// never builds a backlog.
+inline constexpr int kRxPollIntervalMs = 150;
+inline constexpr int kTxPollIntervalMs = 15;
+inline constexpr int kRxPollSlots = 12;
+inline constexpr int kTxPollSlots = 5;
+// The endpoint to read on tick `slot` (any non-negative number; it wraps).
+const char* pollPath(bool transmitting, int slot);
+
+// How often the keep-awake request is repeated. The amplifier's shortest sleep
+// setting is 3 minutes, so a minute leaves two chances before it sleeps.
+inline constexpr int kKeepAwakeIntervalMs = 60 * 1000;
 // Reads the reply to the tuner probe, OPTIONS /tuner. The probe never runs the
 // route's handler, so it cannot start a tune and, unlike a PUT, does not wake a
 // sleeping amplifier or reset its sleep timer. A server built on Bottle (the
