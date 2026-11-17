@@ -1027,6 +1027,25 @@ jobs:
             "out/AetherSDR-${SAFE_REF}-macOS-${{ matrix.label }}.app.tar.zst"
           ls -l out
 
+      # Test builds only (branch dispatches on a fork, never a tag): an
+      # unsigned DMG for installing by hand, since the signing job that makes
+      # the real one does not run there.
+      - name: Build an unsigned test DMG
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          set -euo pipefail
+          SAFE_REF="${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
+          hdiutil create -volname "AetherSDR" -srcfolder app/AetherSDR.app -ov \
+            -format UDZO "out/AetherSDR-${SAFE_REF}-macOS-${{ matrix.label }}-unsigned-test.dmg"
+
+      - name: Upload test DMG
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: macOS-test-dmg-${{ matrix.label }}
+          path: out/AetherSDR-*-unsigned-test.dmg
+          if-no-files-found: error
+
       - name: Upload artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
