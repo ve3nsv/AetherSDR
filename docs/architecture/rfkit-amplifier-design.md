@@ -31,8 +31,7 @@ widened:
 - a failed tune is not reported anywhere (`/data` stays empty and `/tuner` is
   unchanged), so the applet cannot show a result.
 
-Whether a running tune can be cancelled is unverified, and must be verified
-before this is merged. The request is used for nothing else.
+Cancel was verified on hardware: releasing RF mid-tune abandons the tune. The amplifier’s own Tune & Store button and the applet’s TUNE stay lit until RF is next applied, then return to idle without restarting. The applet shows the amplifier’s reported state and does not latch its own.
 
 The wire is HTTP/1.1 with JSON bodies, unauthenticated, on a port the document
 shows as 8080.
