@@ -404,6 +404,8 @@ The **RF-KIT Amplifier** applet:
   own TUNE first, then press TUNE here. The button turns amber while the
   amplifier reports a tune in progress.
 
+  If RF is removed in the middle of a tune, the amplifier keeps reporting that it is tuning, so the button stays amber and TUNE is unavailable until RF is applied again (or the tuner is reset from the amplifier’s front panel). AetherSDR has no tuner-mode control, so it cannot clear this itself.
+
   The RF2K-S manual (section 7.2) says tuning needs **4 to 39 W** of drive, and
   recommends at least 10 W for a precise tune; outside that range the amplifier's
   own Tune button stays inactive. When the forward power the amplifier reports is
