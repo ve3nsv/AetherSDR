@@ -31,7 +31,16 @@ widened:
 - a failed tune is not reported anywhere (`/data` stays empty and `/tuner` is
   unchanged), so the applet cannot show a result.
 
-Cancel was verified on hardware: releasing RF mid-tune abandons the tune. The amplifier’s own Tune & Store button and the applet’s TUNE stay lit until RF is next applied, then return to idle without restarting. The applet shows the amplifier’s reported state and does not latch its own.
+**Cancel.** The server inspected has no stop route: `tuner_mode` accepts only
+`START`, so this applet sends no cancel, and TUNE is disabled (not hidden) while
+the tuner reads tuning, so a second press sends nothing. Checked on hardware
+(RF2K-S, modified server): releasing RF mid-tune abandons the tune. The
+amplifier's own Tune & Store button and the applet's TUNE stay lit, because the
+amplifier still reports tuning, until RF is next applied; both then return to
+idle and the tune does not restart. The applet shows the amplifier's reported
+state and does not latch its own. AetherSDR has no tuner-mode control, so an
+abandoned tune is cleared by applying RF again or from the amplifier's front
+panel.
 
 The wire is HTTP/1.1 with JSON bodies, unauthenticated, on a port the document
 shows as 8080.
@@ -101,7 +110,10 @@ Controls: OPERATE/STANDBY, antenna selection (internal 1–4,
 range-checked before the wire), and error reset, which is enabled only while the
 amplifier is reporting an error (a non-empty `/data` status, idle being the
 empty string, or an operational-interface error) and asks for confirmation
-first; the amplifier refuses one it cannot do (409).
+first; the amplifier refuses one it cannot do (409). A failed, refused or
+unreadable `/data` read discards the last status text, so a stale fault cannot
+leave RESET enabled. The banner shows the status text and the interface error on
+separate lines.
 
 The red rule is "any non-empty status text", and that text is shown in the same red
 banner as the interface error ("Error: High SWR"). The amplifier's manual lists eight
@@ -163,7 +175,8 @@ never transmits (Principle VI).
   and the first request after sleep can take about 5 s, so the TUNE button greys
   until the amplifier answers.
 - **Protocol authority.** See §2: the community-modified `restServer.py`, with
-  its three stated limits; cancelling a running tune is unverified.
+  its three stated limits; there is no cancel request (see the Cancel
+  paragraph in §2).
 - **Gate.** `startTune()` sends only when the setting is on and the last
   tuner readback is AUTO or MANUAL. It is refused while the tuner is OFF,
   bypassed, already tuning, or unread.
@@ -214,11 +227,19 @@ The API document is silent or ambiguous on these; the implementation chooses
 the conservative reading and each is a one-line change:
 
 1. The unit strings actually sent for `band` and `frequency`.
-2. The vocabulary of `/data`'s `status` text. It is displayed verbatim; it is
-   not parsed into a fault state.
+2. The vocabulary of `/data`'s `status` text. It is displayed verbatim, but a
+   non-empty `status` is now treated as a fault (it drives the red Error banner
+   and enables RESET). The evidence: the modified `restServer.py` sets
+   `status = str(errorState)`, which is empty in normal operation. That reading
+   comes from one server; the stock `/data` `status` is assumed to have the same
+   semantics. The operational-interface `error` is shown as its own line in the
+   banner, so neither source hides the other.
 3. The `false` value in the tuner `mode` enum (a generator artifact in the
    document). Accepted as a boolean or the string `"false"` and shown as `OFF`.
-4. Whether the manual's eight error messages are the whole vocabulary; any non-empty status is treated as an error (§5).
+4. Settled by the RFC #6712 ruling: RESET is enabled only while a fault is
+   showing and the connection and the last `/data` read are good (§5). Whether
+   the manual's eight error messages are the whole vocabulary does not matter,
+   because any non-empty status is treated as a fault.
 5. Real poll latency: if the device cannot sustain 250 ms rounds, the
    serialization above degrades the rate gracefully, but the interval may want
    raising.

@@ -23,10 +23,10 @@ namespace AetherSDR {
 //   - one server variant was inspected; others may differ;
 //   - the amplifier's updater overwrites the modification;
 //   - a failed tune is not reported (/data stays empty, /tuner is unchanged).
-// Whether a running tune can be cancelled through it is unverified and must be
-// verified before merge. The request is sent only when the operator has said, in
-// the device settings, that their amplifier runs that server; nothing is ever
-// sent to find out.
+// The server has no stop route (tuner_mode accepts only START), so no cancel is
+// sent; releasing RF mid-tune abandons the tune (checked on an RF2K-S). The
+// request is sent only when the operator has said, in the device settings, that
+// their amplifier runs that server; nothing is ever sent to find out.
 //
 // Unlike every other amplifier peripheral here the wire is plain HTTP/1.1
 // carrying JSON, not a socket protocol with its own framing, so this layer is

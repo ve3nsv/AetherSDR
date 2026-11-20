@@ -546,7 +546,13 @@ void RfkitApplet::setStatus(const Rfkit::Status& status)
         m_faultLabel->hide();
         m_faultLabel->clear();
     } else {
-        m_faultLabel->setText(tr("Error: %1").arg(problems.join(QStringLiteral("; "))));
+        // One line per source, so neither the status text nor the interface
+        // error can hide the other.
+        QStringList lines;
+        for (const QString& problem : problems) {
+            lines << tr("Error: %1").arg(problem);
+        }
+        m_faultLabel->setText(lines.join(QLatin1Char('\n')));
         m_faultLabel->show();
     }
 

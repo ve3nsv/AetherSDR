@@ -287,6 +287,7 @@ void RfkitConnection::onReplyFinished(QNetworkReply* reply, const Request& reque
             if (!m_deliberateDisconnect && m_autoReconnect) { armReconnect(); }
             return;
         }
+        dropStaleData(request);
         pump();
         return;
     }
@@ -354,7 +355,12 @@ bool RfkitConnection::applyReply(const Request& request, const QByteArray& body)
         m_status.power = *v;
     } else if (p == QLatin1String(Rfkit::kPathData)) {
         const auto v = Rfkit::parseData(body);
-        if (!v) { return malformed(); }
+        if (!v) {
+            malformed();
+            // An unreadable status is an unknown status, not the last good one.
+            m_status.data.reset();
+            return true;
+        }
         m_status.data = *v;
     } else if (p == QLatin1String(Rfkit::kPathTuner)) {
         const auto v = Rfkit::parseTuner(body);
@@ -419,11 +425,24 @@ void RfkitConnection::onTransportFailure(const QString& errorString, const Reque
         if (!m_deliberateDisconnect && m_autoReconnect) { armReconnect(); }
         return;
     }
+    dropStaleData(request);
     if (++m_consecutiveFailures >= kMaxConsecutiveFailures) {
         onTransportDown(errorString);
         return;
     }
     pump();  // drop the failed request and carry on with the rest
+}
+
+void RfkitConnection::dropStaleData(const Request& request)
+{
+    // The status text drives the Error banner and the RESET button. When its
+    // read fails the last value is stale: forget it, so a fault that may have
+    // cleared cannot leave RESET enabled (RFC #6712).
+    if (request.method == Request::Method::Get
+        && request.path == path(Rfkit::kPathData) && m_status.data) {
+        m_status.data.reset();
+        emit statusUpdated(m_status);
+    }
 }
 
 void RfkitConnection::onTransportDown(const QString& errorString)

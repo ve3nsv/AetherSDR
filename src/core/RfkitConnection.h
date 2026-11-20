@@ -102,6 +102,8 @@ private:
     void onProbeSucceeded();
     void onTransportFailure(const QString& errorString, const Request& request);
     void onTransportDown(const QString& errorString);
+    // A failed or refused /data read: forget the last status text (see the .cpp).
+    void dropStaleData(const Request& request);
     void poll();
     void enqueueFullRefresh();
     void armReconnect();

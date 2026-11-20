@@ -173,6 +173,50 @@ int main()
                    && tunerPillIsAlert(TunerPill::NotTuned)
                    && tuneAllowed(*parseTuner(R"({"mode": "AUTO", "setup": "NOT TUNED"})")));
         report("an unknown mode gives the neutral pill", pillOf(R"({"mode": "WARP"})") == TunerPill::Unknown);
+
+        // The whole mode x setup table, pinned (RFC #6712). Precedence: an
+        // unknown mode is neutral; Off and Bypass win over any setup; a tune in
+        // progress is IN; otherwise NOT TUNED (red) beats the rest, and only a
+        // MANUAL mode reads the BYPASS setup as MAN BYP.
+        {
+            const TunerMode modes[] = {TunerMode::Unknown, TunerMode::Bypass, TunerMode::Manual,
+                                       TunerMode::AutoTuning, TunerMode::Auto, TunerMode::Off};
+            const TunerSetup setups[] = {TunerSetup::Unknown, TunerSetup::NotTuned, TunerSetup::Bypass,
+                                         TunerSetup::CL, TunerSetup::LC};
+            const auto expected = [](TunerMode m, TunerSetup su) {
+                switch (m) {
+                case TunerMode::Unknown:    return TunerPill::Unknown;
+                case TunerMode::Bypass:     return TunerPill::Bypass;
+                case TunerMode::Off:        return TunerPill::Off;
+                case TunerMode::AutoTuning: return TunerPill::On;
+                case TunerMode::Auto:
+                    return su == TunerSetup::NotTuned ? TunerPill::NotTuned : TunerPill::On;
+                case TunerMode::Manual:
+                    return su == TunerSetup::NotTuned ? TunerPill::NotTuned
+                           : su == TunerSetup::Bypass ? TunerPill::ManualBypass : TunerPill::Manual;
+                }
+                return TunerPill::Unknown;
+            };
+            bool all = true;
+            bool noRedUnknown = true;
+            for (const TunerMode m : modes) {
+                for (const TunerSetup su : setups) {
+                    Tuner t;
+                    t.mode = m;
+                    t.setup = su;
+                    const TunerPill got = tunerPill(t);
+                    all = all && got == expected(m, su);
+                    if (m == TunerMode::Unknown || su == TunerSetup::Unknown) {
+                        // Unknown never reads as the red NO TUNE.
+                        noRedUnknown = noRedUnknown
+                            && !(m == TunerMode::Unknown && tunerPillIsAlert(got))
+                            && !(su == TunerSetup::Unknown && got == TunerPill::NotTuned);
+                    }
+                }
+            }
+            report("the full tuner mode x setup table maps as documented (30 cases)", all);
+            report("an unknown mode or setup never reads as the red ATU NO TUNE", noRedUnknown);
+        }
         report("pill labels use the KPA1500's ATU wording",
                tunerPillLabel(TunerPill::On) == "ATU IN" && tunerPillLabel(TunerPill::Manual) == "ATU MAN"
                    && tunerPillLabel(TunerPill::ManualBypass) == "ATU MAN BYP"
